@@ -25,3 +25,8 @@ dist-ssr
 
 node_modules
 design_modules
+
+*.env
+*.env.local
+*.env.development.local
+*.env.test.local
