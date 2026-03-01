@@ -1,7 +1,8 @@
+import { useState, useRef, useEffect } from "react";
 import { Link, useLocation, Outlet } from "react-router-dom";
-import { ConnectButton } from "thirdweb/react";
+import { ConnectButton, useActiveAccount } from "thirdweb/react";
 import { client } from "../../client";
-import { SearchInput } from "../common";
+import { SearchDropdown, NotificationDropdown } from "../common";
 
 interface SidebarLink {
   to: string;
@@ -18,6 +19,23 @@ const SIDEBAR_LINKS: SidebarLink[] = [
 
 export default function DashboardLayout() {
   const { pathname } = useLocation();
+  const activeAccount = useActiveAccount();
+  const [showWalletInfo, setShowWalletInfo] = useState(false);
+  const walletRef = useRef<HTMLDivElement>(null);
+
+  // Close wallet dropdown on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (walletRef.current && !walletRef.current.contains(e.target as Node)) {
+        setShowWalletInfo(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const addr = activeAccount?.address;
+  const shortAddr = addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : null;
 
   return (
     <div className="flex h-screen overflow-hidden bg-background-dark">
@@ -76,18 +94,51 @@ export default function DashboardLayout() {
             {SIDEBAR_LINKS.find((l) => l.to === pathname)?.label ?? "PolkaMe"}
           </h2>
           <div className="flex items-center gap-4">
-            <SearchInput
+            <SearchDropdown
               placeholder="Search accounts..."
               className="hidden sm:block w-64"
             />
-            <button className="size-10 bg-neutral-muted rounded-lg flex items-center justify-center text-text-muted hover:text-white hover:bg-primary/20 transition-all duration-200 hover:scale-105">
-              <span className="material-symbols-outlined">notifications</span>
-            </button>
-            <button className="size-10 bg-neutral-muted rounded-lg flex items-center justify-center text-text-muted hover:text-white hover:bg-primary/20 transition-all duration-200 hover:scale-105">
-              <span className="material-symbols-outlined">
-                account_balance_wallet
-              </span>
-            </button>
+            <NotificationDropdown />
+            {/* Wallet quick-view */}
+            <div ref={walletRef} className="relative">
+              <button
+                onClick={() => setShowWalletInfo(!showWalletInfo)}
+                className="size-10 bg-neutral-muted rounded-lg flex items-center justify-center text-text-muted hover:text-white hover:bg-primary/20 transition-all duration-200 hover:scale-105"
+              >
+                <span className="material-symbols-outlined">account_balance_wallet</span>
+              </button>
+              {showWalletInfo && (
+                <div className="absolute top-full right-0 mt-2 w-72 bg-background-dark border border-neutral-border rounded-xl shadow-2xl z-50 p-4 space-y-3">
+                  <h4 className="font-bold text-sm">Wallet Info</h4>
+                  {addr ? (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <div className="size-8 rounded-full bg-primary/20 flex items-center justify-center">
+                          <span className="material-symbols-outlined text-primary text-sm">account_balance_wallet</span>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-bold">Connected</p>
+                          <p className="text-[10px] text-text-muted font-mono truncate">{addr}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="size-2 rounded-full bg-emerald-400"></span>
+                        <span className="text-xs text-emerald-400">Hardhat Local Network</span>
+                      </div>
+                      <button
+                        onClick={() => { navigator.clipboard.writeText(addr); setShowWalletInfo(false); }}
+                        className="w-full py-2 bg-neutral-muted hover:bg-neutral-border text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-1"
+                      >
+                        <span className="material-symbols-outlined text-sm">content_copy</span>
+                        Copy Address
+                      </button>
+                    </>
+                  ) : (
+                    <p className="text-sm text-text-muted">No wallet connected. Use the sidebar to connect.</p>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </header>
 
