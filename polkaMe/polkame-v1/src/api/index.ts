@@ -1,7 +1,6 @@
 /* ------------------------------------------------------------------ */
-/*  PolkaMe — Stubbed API layer                                       */
-/*  Every function returns typed mock data.  Replace the body with    */
-/*  real fetch/axios calls when the backend is ready.                  */
+/*  PolkaMe — API layer (reads from deployed Solidity contracts)      */
+/*  Connected to local Hardhat node at http://127.0.0.1:8545          */
 /* ------------------------------------------------------------------ */
 
 import type {
@@ -23,188 +22,535 @@ import type {
   PlatformStats,
 } from "../types";
 
-// ─── helpers ──────────────��───────────────────────────────────────────
-const delay = (ms = 300) => new Promise((r) => setTimeout(r, ms));
+import {
+  getIdentityContract,
+  getAccountsContract,
+  getGovernanceContract,
+  getSecurityContract,
+  getUserAddress,
+  getIdentityReadOnly,
+  getAccountsReadOnly,
+  getGovernanceReadOnly,
+  getSecurityReadOnly,
+  VERIFICATION_STATE,
+  CHAIN_TYPE,
+  SOCIAL_TYPE,
+  ACTIVITY_STATUS,
+  VALIDATOR_STATUS,
+} from "../contracts";
+
+// ─── helpers ──────────────────────────────────────────────────────────
 function ok<T>(data: T): ApiResponse<T> {
   return { data, success: true };
 }
-
-// ─── Identity ─────────────────────────────────────────────────────────
-export async function getUserIdentity(): Promise<ApiResponse<Identity>> {
-  await delay();
-  return ok<Identity>({
-    id: "polkame-001",
-    displayName: "Web3 Explorer",
-    walletAddress: "5GrwvaEF...WzC5",
-    score: 88,
-    scoreChange: 5.2,
-    createdAt: "2025-09-01T00:00:00Z",
-    updatedAt: "2026-02-27T12:00:00Z",
-  });
+function fail<T>(error: string): ApiResponse<T> {
+  return { data: undefined as unknown as T, success: false, error };
 }
 
-export async function getVerificationStatus(): Promise<ApiResponse<VerificationStatus>> {
-  await delay();
-  return ok<VerificationStatus>({
-    email: "verified",
-    governance: "verified",
-    socials: "pending",
-    kyc: "unverified",
-  });
+function tsFromUnix(ts: bigint): string {
+  return new Date(Number(ts) * 1000).toISOString();
+}
+
+function timeAgo(ts: bigint): string {
+  const secs = Math.floor(Date.now() / 1000) - Number(ts);
+  if (secs < 60) return "just now";
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
+  return `${Math.floor(secs / 86400)}d ago`;
+}
+
+function timeLeft(endTs: bigint): string {
+  const secs = Number(endTs) - Math.floor(Date.now() / 1000);
+  if (secs <= 0) return "ended";
+  const d = Math.floor(secs / 86400);
+  const h = Math.floor((secs % 86400) / 3600);
+  return `${d}d ${h}h`;
+}
+
+// ─── Identity ─────────────────────────────────────────────────────────
+
+/** Check if the given address (or connected wallet) already has a DID.
+ *  Uses read-only contract — never triggers a wallet popup. */
+export async function checkHasDID(forAddress?: string): Promise<boolean> {
+  try {
+    const identity = getIdentityReadOnly();
+    const addr = forAddress ?? await getUserAddress();
+    return await identity.hasDID(addr);
+  } catch {
+    return false;
+  }
+}
+
+/** Create a new DID for the connected wallet */
+export async function createDID(displayName: string): Promise<ApiResponse<Identity>> {
+  try {
+    const identity = await getIdentityContract();
+    const tx = await identity.createDID(displayName);
+    await tx.wait();
+    // Read back the fresh DID
+    return getUserIdentity();
+  } catch (e: any) {
+    return fail(e.message);
+  }
+}
+
+/** Search for a user by wallet address OR display name.
+ *  Address: direct lookup. Name: scans DIDCreated events to find all users, then matches. */
+export async function searchUser(addressOrName: string): Promise<ApiResponse<Identity[]>> {
+  try {
+    const identity = getIdentityReadOnly();
+    const { ethers } = await import("ethers");
+    const query = addressOrName.trim();
+    const isAddr = ethers.isAddress(query);
+
+    // If it looks like an address, do a direct lookup
+    if (isAddr) {
+      const has = await identity.hasDID(query);
+      if (!has) return ok([]);
+      const did = await identity.getDID(query);
+      return ok([{
+        id: `did:ethr:${query}`,
+        displayName: did.displayName,
+        walletAddress: query,
+        score: Number(did.reputationScore),
+        scoreChange: Number(did.scoreChange),
+        createdAt: tsFromUnix(did.createdAt),
+        updatedAt: tsFromUnix(did.updatedAt),
+      }]);
+    }
+
+    // Otherwise, search by name — scan DIDCreated events to get all registered addresses
+    const filter = identity.filters.DIDCreated();
+    const events = await identity.queryFilter(filter, 0, "latest");
+    const results: Identity[] = [];
+    const lowerQuery = (query as string).toLowerCase();
+
+    for (const ev of events) {
+      const userAddr = (ev as any).args?.[0] ?? (ev as any).args?.user;
+      if (!userAddr) continue;
+      try {
+        const did = await identity.getDID(userAddr);
+        if (did.displayName.toLowerCase().includes(lowerQuery)) {
+          results.push({
+            id: `did:ethr:${userAddr}`,
+            displayName: did.displayName,
+            walletAddress: userAddr,
+            score: Number(did.reputationScore),
+            scoreChange: Number(did.scoreChange),
+            createdAt: tsFromUnix(did.createdAt),
+            updatedAt: tsFromUnix(did.updatedAt),
+          });
+        }
+      } catch {
+        // skip users whose DID was deactivated
+      }
+    }
+    return ok(results);
+  } catch (e: any) {
+    return fail(e.message);
+  }
+}
+
+export async function getUserIdentity(forAddress?: string): Promise<ApiResponse<Identity>> {
+  try {
+    const identity = getIdentityReadOnly();
+    const addr = forAddress || await getUserAddress();
+    const has = await identity.hasDID(addr);
+    if (!has) return fail("No DID — call createDID first");
+    const did = await identity.getDID(addr);
+    return ok<Identity>({
+      id: `did:ethr:${addr}`,
+      displayName: did.displayName,
+      walletAddress: addr,
+      score: Number(did.reputationScore),
+      scoreChange: Number(did.scoreChange),
+      createdAt: tsFromUnix(did.createdAt),
+      updatedAt: tsFromUnix(did.updatedAt),
+    });
+  } catch (e: any) {
+    return fail(e.message);
+  }
+}
+
+export async function getVerificationStatus(forAddress?: string): Promise<ApiResponse<VerificationStatus>> {
+  try {
+    const identity = getIdentityReadOnly();
+    const addr = forAddress || await getUserAddress();
+    const v = await identity.getVerificationStatus(addr);
+    return ok<VerificationStatus>({
+      email: VERIFICATION_STATE[Number(v.email)] as VerificationStatus["email"],
+      governance: VERIFICATION_STATE[Number(v.governance)] as VerificationStatus["governance"],
+      socials: VERIFICATION_STATE[Number(v.socials)] as VerificationStatus["socials"],
+      kyc: VERIFICATION_STATE[Number(v.kyc)] as VerificationStatus["kyc"],
+    });
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
 // ─── Linked Accounts ──────────────────────────────────────────────────
-export async function getLinkedChainAccounts(): Promise<ApiResponse<LinkedChainAccount[]>> {
-  await delay();
-  return ok<LinkedChainAccount[]>([
-    {
-      id: "chain-1",
-      chain: "polkadot",
-      label: "Polkadot Mainnet",
-      address: "15o...4h9r",
-      balance: "428.50 DOT",
-      tag: "Primary Account",
-      logoColor: "bg-primary",
-    },
-    {
-      id: "chain-2",
-      chain: "kusama",
-      label: "Kusama Relay",
-      address: "E8w...2k9L",
-      balance: "12.20 KSM",
-      tag: "Staking Active",
-      logoColor: "bg-black",
-    },
-  ]);
+export async function getLinkedChainAccounts(forAddress?: string): Promise<ApiResponse<LinkedChainAccount[]>> {
+  try {
+    const accounts = getAccountsReadOnly();
+    const addr = forAddress || await getUserAddress();
+    const raw = await accounts.getLinkedChainAccounts(addr);
+    const COLORS = ["bg-primary", "bg-black", "bg-blue-600", "bg-purple-600", "bg-gray-500"];
+    const result: LinkedChainAccount[] = raw
+      .filter((a: any) => a.active)
+      .map((a: any, i: number) => ({
+        id: `chain-${i}`,
+        chain: CHAIN_TYPE[Number(a.chain)] as LinkedChainAccount["chain"],
+        label: a.label,
+        address: a.accountAddress,
+        balance: "—",
+        tag: a.tag,
+        logoColor: COLORS[Number(a.chain)] || "bg-gray-500",
+      }));
+    return ok(result);
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
-export async function getLinkedSocialAccounts(): Promise<ApiResponse<LinkedSocialAccount[]>> {
-  await delay();
-  return ok<LinkedSocialAccount[]>([
-    {
-      id: "social-1",
-      platform: "twitter",
-      handle: "@web3_enthusiast",
-      verified: true,
-      linkedAt: "2026-02-16T10:00:00Z",
-    },
-  ]);
+export async function getLinkedSocialAccounts(forAddress?: string): Promise<ApiResponse<LinkedSocialAccount[]>> {
+  try {
+    const accounts = getAccountsReadOnly();
+    const addr = forAddress || await getUserAddress();
+    const raw = await accounts.getLinkedSocialAccounts(addr);
+    const result: LinkedSocialAccount[] = raw
+      .filter((a: any) => a.active)
+      .map((a: any, i: number) => ({
+        id: `social-${i}`,
+        platform: SOCIAL_TYPE[Number(a.platform)] as LinkedSocialAccount["platform"],
+        handle: a.handle,
+        verified: a.verified,
+        linkedAt: tsFromUnix(a.linkedAt),
+      }));
+    return ok(result);
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
-export async function linkNewAccount(_chain: string): Promise<ApiResponse<{ linked: boolean }>> {
-  await delay(500);
-  return ok({ linked: true });
+export async function linkNewAccount(chain: string): Promise<ApiResponse<{ linked: boolean }>> {
+  try {
+    const accounts = await getAccountsContract();
+    const chainIndex = CHAIN_TYPE.indexOf(chain as any);
+    const tx = await accounts.linkChainAccount(
+      chainIndex >= 0 ? chainIndex : 4,
+      chain,
+      "pending-address",
+      "New",
+    );
+    await tx.wait();
+    return ok({ linked: true });
+  } catch (e: any) {
+    return fail(e.message);
+  }
+}
+
+/** Link a chain account with full details */
+export async function linkChainAccountFull(
+  chain: string, label: string, address: string, tag: string
+): Promise<ApiResponse<{ linked: boolean }>> {
+  try {
+    const accounts = await getAccountsContract();
+    const chainIndex = CHAIN_TYPE.indexOf(chain.toLowerCase() as any);
+    const tx = await accounts.linkChainAccount(
+      chainIndex >= 0 ? chainIndex : 4, label, address, tag
+    );
+    await tx.wait();
+    return ok({ linked: true });
+  } catch (e: any) {
+    return fail(e.message);
+  }
+}
+
+/** Link a social account */
+export async function linkSocialAccountAPI(
+  platform: "twitter" | "discord" | "github", handle: string
+): Promise<ApiResponse<{ linked: boolean }>> {
+  try {
+    const accounts = await getAccountsContract();
+    const platformIndex = SOCIAL_TYPE.indexOf(platform);
+    const tx = await accounts.linkSocialAccount(platformIndex, handle);
+    await tx.wait();
+    return ok({ linked: true });
+  } catch (e: any) {
+    return fail(e.message);
+  }
+}
+
+/** Authorize a dApp */
+export async function authorizeDApp(
+  name: string, dAppAddress: string
+): Promise<ApiResponse<{ authorized: boolean }>> {
+  try {
+    const accounts = await getAccountsContract();
+    const tx = await accounts.authorizeDApp(name, dAppAddress);
+    await tx.wait();
+    return ok({ authorized: true });
+  } catch (e: any) {
+    return fail(e.message);
+  }
+}
+
+/** Log an activity entry */
+export async function logActivity(
+  action: string, app: string, status: "success" | "pending" | "failed"
+): Promise<ApiResponse<{ logged: boolean }>> {
+  try {
+    const accounts = await getAccountsContract();
+    const statusIndex = ACTIVITY_STATUS.indexOf(status);
+    const tx = await accounts.logActivity(action, app, statusIndex);
+    await tx.wait();
+    return ok({ logged: true });
+  } catch (e: any) {
+    return fail(e.message);
+  }
+}
+
+/** Stake tokens */
+export async function stakeTokens(amountEth: string): Promise<ApiResponse<{ staked: boolean }>> {
+  try {
+    const governance = await getGovernanceContract();
+    const { ethers } = await import("ethers");
+    const tx = await governance.stake({ value: ethers.parseEther(amountEth) });
+    await tx.wait();
+    return ok({ staked: true });
+  } catch (e: any) {
+    return fail(e.message);
+  }
+}
+
+/** Create a governance proposal */
+export async function createProposal(
+  title: string, description: string, durationDays: number
+): Promise<ApiResponse<{ created: boolean }>> {
+  try {
+    const governance = await getGovernanceContract();
+    const tx = await governance.createProposal(title, description, durationDays * 86400);
+    await tx.wait();
+    return ok({ created: true });
+  } catch (e: any) {
+    return fail(e.message);
+  }
+}
+
+/** Initialize privacy preferences (first time) */
+export async function initPrivacyPrefs(): Promise<ApiResponse<{ initialized: boolean }>> {
+  try {
+    const security = await getSecurityContract();
+    const tx = await security.initializePrivacyPrefs();
+    await tx.wait();
+    return ok({ initialized: true });
+  } catch (e: any) {
+    return fail(e.message);
+  }
+}
+
+/** Create a session */
+export async function createSession(
+  device: string, browser: string, location: string
+): Promise<ApiResponse<{ created: boolean }>> {
+  try {
+    const security = await getSecurityContract();
+    const tx = await security.createSession(device, browser, location, true);
+    await tx.wait();
+    return ok({ created: true });
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
 // ─── Activity ─────────────────────────────────────────────────────────
-export async function getRecentActivity(): Promise<ApiResponse<ActivityEntry[]>> {
-  await delay();
-  return ok<ActivityEntry[]>([
-    { id: "a1", action: "Sign Auth", icon: "vpn_key", app: "HydraDX Dex", status: "success", timestamp: "2 mins ago" },
-    { id: "a2", action: "Identity Update", icon: "description", app: "Polkadot JS", status: "success", timestamp: "1 hour ago" },
-    { id: "a3", action: "Governance Vote", icon: "link", app: "SubSquare", status: "pending", timestamp: "5 hours ago" },
-  ]);
+export async function getRecentActivity(forAddress?: string): Promise<ApiResponse<ActivityEntry[]>> {
+  try {
+    const accounts = getAccountsReadOnly();
+    const addr = forAddress || await getUserAddress();
+    const raw = await accounts.getRecentActivity(addr);
+    const ICONS: Record<string, string> = {
+      "Linked wallet": "account_balance_wallet",
+      "Sign Auth": "vpn_key",
+      "Identity Update": "description",
+      "Governance Vote": "how_to_vote",
+    };
+    const result: ActivityEntry[] = raw.map((a: any, i: number) => ({
+      id: `a${i}`,
+      action: a.action,
+      icon: ICONS[a.action] || "receipt_long",
+      app: a.app,
+      status: ACTIVITY_STATUS[Number(a.status)] as ActivityEntry["status"],
+      timestamp: timeAgo(a.timestamp),
+    }));
+    return ok(result);
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
 // ─── Authorized dApps ─────────────────────────────────────────────────
-export async function getAuthorizedDApps(): Promise<ApiResponse<AuthorizedDApp[]>> {
-  await delay();
-  return ok<AuthorizedDApp[]>([
-    { id: "d1", name: "Astar Network", lastLogin: "Today", logoLetter: "A", logoBgColor: "bg-primary" },
-    { id: "d2", name: "HydraDX Protocol", lastLogin: "2m ago", logoLetter: "H", logoBgColor: "bg-purple-600" },
-    { id: "d3", name: "Subscan Explorer", lastLogin: "2 days ago", logoLetter: "S", logoBgColor: "bg-blue-600" },
-  ]);
+export async function getAuthorizedDApps(forAddress?: string): Promise<ApiResponse<AuthorizedDApp[]>> {
+  try {
+    const accounts = getAccountsReadOnly();
+    const addr = forAddress || await getUserAddress();
+    const raw = await accounts.getAuthorizedDApps(addr);
+    const COLORS = ["bg-primary", "bg-purple-600", "bg-blue-600", "bg-red-500", "bg-green-600"];
+    const result: AuthorizedDApp[] = raw
+      .filter((d: any) => d.active)
+      .map((d: any, i: number) => ({
+        id: `d${i}`,
+        name: d.name,
+        lastLogin: timeAgo(d.lastAccessed),
+        logoLetter: d.name.charAt(0),
+        logoBgColor: COLORS[i % COLORS.length],
+      }));
+    return ok(result);
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
-export async function revokeDApp(_dAppId: string): Promise<ApiResponse<{ revoked: boolean }>> {
-  await delay(400);
-  return ok({ revoked: true });
+export async function revokeDApp(dAppId: string): Promise<ApiResponse<{ revoked: boolean }>> {
+  try {
+    const accounts = await getAccountsContract();
+    const index = parseInt(dAppId.replace("d", ""), 10);
+    const tx = await accounts.revokeDApp(index);
+    await tx.wait();
+    return ok({ revoked: true });
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
 // ─── Governance & Staking ─────────────────────────────────────────────
-export async function getStakingMetrics(): Promise<ApiResponse<StakingMetrics>> {
-  await delay();
-  return ok<StakingMetrics>({
-    totalStaked: "1,240.50",
-    claimableRewards: "12.84",
-    votingPower: "45.8k",
-    votingWeight: "1.2x (3mo lock)",
-    stakingApyTrend: [50, 75, 66, 83, 66, 80, 100],
-    currentApy: 14.2,
-    participationPct: 82.4,
-    totalVotes: "4.2M",
-    stakeChangePercent: 2.4,
-  });
+export async function getStakingMetrics(forAddress?: string): Promise<ApiResponse<StakingMetrics>> {
+  try {
+    const governance = getGovernanceReadOnly();
+    const addr = forAddress || await getUserAddress();
+    const m = await governance.getStakingMetrics(addr);
+    const { ethers } = await import("ethers");
+    return ok<StakingMetrics>({
+      totalStaked: ethers.formatEther(m.totalStaked),
+      claimableRewards: ethers.formatEther(m.claimableRewards),
+      votingPower: ethers.formatEther(m.votingPower),
+      votingWeight: `${Number(m.convictionMultiplier)}x conviction`,
+      stakingApyTrend: [50, 75, 66, 83, 66, 80, 100], // placeholder — no on-chain APY history
+      currentApy: 14.2,
+      participationPct: 82.4,
+      totalVotes: "—",
+      stakeChangePercent: 0,
+    });
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
 export async function getActiveProposals(): Promise<ApiResponse<Proposal[]>> {
-  await delay();
-  return ok<Proposal[]>([
-    {
-      id: "p1",
-      refNum: 824,
-      tag: "Referendum #824",
-      tagColor: "amber",
-      title: "Technical Fellowship: Runtime Upgrade v9430",
-      description:
-        "This proposal aims to upgrade the Polkadot relay chain to runtime version 9430, introducing enhancements to the XCM protocol and performance improvements for parachains.",
-      ayePct: 88,
-      nayPct: 12,
-      endsIn: "2d 14h",
-    },
-    {
-      id: "p2",
-      refNum: 821,
-      tag: "Referendum #821",
-      tagColor: "blue",
-      title: "Treasury Proposal: Polkadot Developer Conference 2026",
-      description:
-        "Funding request for the annual Polkadot Decoded flagship event to support global ecosystem growth and developer onboarding initiatives in Asia.",
-      ayePct: 62,
-      nayPct: 38,
-      endsIn: "5d 22h",
-    },
-  ]);
+  try {
+    const governance = getGovernanceReadOnly();
+    const raw = await governance.getActiveProposals();
+    const result: Proposal[] = raw.map((p: any, i: number) => {
+      const total = Number(p.ayeVotes) + Number(p.nayVotes);
+      return {
+        id: `p${i}`,
+        refNum: Number(p.refNum),
+        tag: p.tag,
+        tagColor: (["amber", "blue", "green", "red"] as const)[i % 4],
+        title: p.title,
+        description: p.description,
+        ayePct: total > 0 ? Math.round((Number(p.ayeVotes) / total) * 100) : 0,
+        nayPct: total > 0 ? Math.round((Number(p.nayVotes) / total) * 100) : 0,
+        endsIn: timeLeft(p.endTime),
+      };
+    });
+    return ok(result);
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
 export async function voteOnProposal(
-  _proposalId: string,
-  _vote: "aye" | "nay",
+  proposalId: string,
+  vote: "aye" | "nay",
 ): Promise<ApiResponse<{ voted: boolean }>> {
-  await delay(600);
-  return ok({ voted: true });
+  try {
+    const governance = await getGovernanceContract();
+    const index = parseInt(proposalId.replace("p", ""), 10);
+    const voteVal = vote === "aye" ? 1 : 2; // Vote enum: 0=None, 1=Aye, 2=Nay
+    const tx = await governance.voteOnProposal(index, voteVal);
+    await tx.wait();
+    return ok({ voted: true });
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
 export async function claimStakingRewards(): Promise<ApiResponse<{ claimed: boolean; amount: string }>> {
-  await delay(800);
-  return ok({ claimed: true, amount: "12.84 DOT" });
+  try {
+    const governance = await getGovernanceContract();
+    const tx = await governance.claimRewards();
+    await tx.wait();
+    return ok({ claimed: true, amount: "claimed" });
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
 export async function getValidators(): Promise<ApiResponse<Validator[]>> {
-  await delay();
-  return ok<Validator[]>([
-    { id: "v1", shortName: "Parity-01", initials: "P1", commission: "3.0%", selfStake: "1.2M DOT", rewards24h: "+0.42 DOT", status: "active" },
-    { id: "v2", shortName: "Web3Foundation-4", initials: "W3", commission: "0.5%", selfStake: "840K DOT", rewards24h: "+0.38 DOT", status: "active" },
-    { id: "v3", shortName: "Zzug-Dot", initials: "ZD", commission: "10.0%", selfStake: "5.1M DOT", rewards24h: "+0.88 DOT", status: "active" },
-  ]);
+  try {
+    const governance = getGovernanceReadOnly();
+    const raw = await governance.getValidators();
+    const { ethers } = await import("ethers");
+    const result: Validator[] = raw.map((v: any, i: number) => ({
+      id: `v${i}`,
+      shortName: v.shortName,
+      initials: v.initials,
+      commission: `${Number(v.commissionBps) / 100}%`,
+      selfStake: `${ethers.formatEther(v.selfStake)} DOT`,
+      rewards24h: "—",
+      status: VALIDATOR_STATUS[Number(v.status)] as Validator["status"],
+    }));
+    return ok(result);
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
 // ─── Verification Hub ─────────────────────────────────────────────────
-export async function getVerificationProgress(): Promise<ApiResponse<VerificationProgress>> {
-  await delay();
-  return ok<VerificationProgress>({ currentStep: 1, totalSteps: 3, percentComplete: 33 });
+export async function getVerificationProgress(forAddress?: string): Promise<ApiResponse<VerificationProgress>> {
+  try {
+    const identity = await getIdentityReadOnly();
+    const addr = forAddress || await getUserAddress();
+    const [step, total, pct] = await identity.getVerificationProgress(addr);
+    return ok<VerificationProgress>({
+      currentStep: Number(step),
+      totalSteps: Number(total),
+      percentComplete: Number(pct),
+    });
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
 export async function submitVerification(
-  _method: "wallet" | "social" | "kyc",
+  method: "wallet" | "social" | "kyc",
 ): Promise<ApiResponse<{ submitted: boolean }>> {
-  await delay(700);
-  return ok({ submitted: true });
+  try {
+    const identity = await getIdentityContract();
+    // Map frontend method names to contract uint8 field IDs
+    const FIELD_MAP: Record<string, number> = { wallet: 0, social: 2, kyc: 3 };
+    const tx = await identity.submitVerification(FIELD_MAP[method] ?? 0);
+    await tx.wait();
+    return ok({ submitted: true });
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
 // ─── Security ─────────────────────────────────────────────────────────
 export async function getHardwareWallets(): Promise<ApiResponse<HardwareWallet[]>> {
-  await delay();
+  // Hardware wallet list is static UI data — no contract storage needed
   return ok<HardwareWallet[]>([
     {
       id: "hw1",
@@ -225,67 +571,125 @@ export async function getHardwareWallets(): Promise<ApiResponse<HardwareWallet[]
   ]);
 }
 
-export async function getPrivacyPreferences(): Promise<ApiResponse<PrivacyPreference[]>> {
-  await delay();
-  return ok<PrivacyPreference[]>([
-    { id: "pp1", label: "Stealth Mode", description: "Hide balance on startup", enabled: true },
-    { id: "pp2", label: "Anonymous RPC", description: "Route traffic through TOR/VPN", enabled: false },
-    { id: "pp3", label: "Metadata Scrubbing", description: "Remove transaction tags locally", enabled: true },
-  ]);
+export async function getPrivacyPreferences(forAddress?: string): Promise<ApiResponse<PrivacyPreference[]>> {
+  try {
+    const security = getSecurityReadOnly();
+    const addr = forAddress || await getUserAddress();
+    const raw = await security.getPrivacyPreferences(addr);
+    const result: PrivacyPreference[] = raw.map((p: any, i: number) => ({
+      id: `pp${i}`,
+      label: p.label,
+      description: p.description,
+      enabled: p.enabled,
+    }));
+    return ok(result);
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
 export async function updatePrivacyPreference(
-  _prefId: string,
-  _enabled: boolean,
+  prefId: string,
+  enabled: boolean,
 ): Promise<ApiResponse<{ updated: boolean }>> {
-  await delay(300);
-  return ok({ updated: true });
+  try {
+    const security = await getSecurityContract();
+    const index = parseInt(prefId.replace("pp", ""), 10);
+    const tx = await security.updatePrivacyPreference(index, enabled);
+    await tx.wait();
+    return ok({ updated: true });
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
-export async function getActiveSessions(): Promise<ApiResponse<ActiveSession[]>> {
-  await delay();
-  return ok<ActiveSession[]>([
-    { id: "s1", device: "MacOS", browser: "Chrome 118", location: "London, UK", isCurrent: true, lastActive: "Now", icon: "laptop_mac" },
-    { id: "s2", device: "iPhone 14 Pro", browser: "iOS 17", location: "Berlin, DE", isCurrent: false, lastActive: "2h ago", icon: "smartphone" },
-  ]);
+export async function getActiveSessions(forAddress?: string): Promise<ApiResponse<ActiveSession[]>> {
+  try {
+    const security = getSecurityReadOnly();
+    const addr = forAddress || await getUserAddress();
+    const raw = await security.getActiveSessions(addr);
+    const result: ActiveSession[] = raw
+      .filter((s: any) => s.active)
+      .map((s: any, i: number) => ({
+        id: `s${i}`,
+        device: s.device,
+        browser: s.browser,
+        location: s.location,
+        isCurrent: s.isCurrent,
+        lastActive: timeAgo(s.lastActive),
+        icon: s.device.toLowerCase().includes("phone") || s.device.toLowerCase().includes("iphone")
+          ? "smartphone"
+          : "laptop_mac",
+      }));
+    return ok(result);
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
-export async function revokeSession(_sessionId: string): Promise<ApiResponse<{ revoked: boolean }>> {
-  await delay(400);
-  return ok({ revoked: true });
+export async function revokeSession(sessionId: string): Promise<ApiResponse<{ revoked: boolean }>> {
+  try {
+    const security = await getSecurityContract();
+    const index = parseInt(sessionId.replace("s", ""), 10);
+    const tx = await security.revokeSession(index);
+    await tx.wait();
+    return ok({ revoked: true });
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
 export async function revokeAllRemoteSessions(): Promise<ApiResponse<{ revoked: boolean }>> {
-  await delay(500);
-  return ok({ revoked: true });
+  try {
+    const security = await getSecurityContract();
+    const tx = await security.revokeAllRemoteSessions();
+    await tx.wait();
+    return ok({ revoked: true });
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
-export async function getSecurityLog(): Promise<ApiResponse<SecurityLogEntry[]>> {
-  await delay();
-  return ok<SecurityLogEntry[]>([
-    { id: "sl1", event: "Password Changed", source: "192.168.1.1", timestamp: "2026-02-24 14:32" },
-    { id: "sl2", event: "Seed Phrase Viewed", source: "User Authorized", timestamp: "2026-02-20 09:15" },
-  ]);
+export async function getSecurityLog(forAddress?: string): Promise<ApiResponse<SecurityLogEntry[]>> {
+  try {
+    const security = getSecurityReadOnly();
+    const addr = forAddress || await getUserAddress();
+    const raw = await security.getSecurityLog(addr);
+    const result: SecurityLogEntry[] = raw.map((e: any, i: number) => ({
+      id: `sl${i}`,
+      event: e.eventDescription,
+      source: e.source,
+      timestamp: tsFromUnix(e.timestamp),
+    }));
+    return ok(result);
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
 
 export async function revealSeedPhrase(_password: string): Promise<ApiResponse<{ phrase: string }>> {
-  await delay(1000);
-  return ok({ phrase: "abandon ability able about above absent absorb abstract absurd abuse access accident alcohol alien all alpha already also alter always amateur amazing among amount amused" });
+  // Seed phrases are NEVER stored on-chain — purely client-side
+  return ok({ phrase: "This is a demo. Real seed phrases are managed by your wallet (MetaMask/Polkadot.js)." });
 }
 
 export async function connectHardwareWallet(
   _walletType: "ledger" | "trezor",
 ): Promise<ApiResponse<{ connected: boolean }>> {
-  await delay(1200);
+  // Hardware wallet pairing is wallet-level, not contract-level
   return ok({ connected: true });
 }
 
 // ─── Landing ──────────────────────────────────────────────────────────
 export async function getPlatformStats(): Promise<ApiResponse<PlatformStats>> {
-  await delay();
-  return ok<PlatformStats>({
-    users: "250k+",
-    parachains: "45+",
-    credentials: "1.2M+",
-  });
+  try {
+    const identity = getIdentityReadOnly(); // read-only — no wallet needed
+    const [users, creds, links] = await identity.getPlatformStats();
+    return ok<PlatformStats>({
+      users: Number(users) > 0 ? `${Number(users)}` : "0",
+      parachains: `${Number(links)}`,
+      credentials: `${Number(creds)}`,
+    });
+  } catch (e: any) {
+    return fail(e.message);
+  }
 }
