@@ -1,0 +1,759 @@
+[
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_identity",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "constructor"
+  },
+  {
+    "inputs": [],
+    "name": "AlreadyRemoved",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "AlreadyVerified",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "DIDRequired",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "EmptyString",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InvalidAddress",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InvalidIndex",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotActive",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotVerifier",
+    "type": "error"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "user",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "action",
+        "type": "string"
+      }
+    ],
+    "name": "ActivityLogged",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "user",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "enum ChainType",
+        "name": "chain",
+        "type": "uint8"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "index",
+        "type": "uint256"
+      }
+    ],
+    "name": "ChainAccountLinked",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "user",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "index",
+        "type": "uint256"
+      }
+    ],
+    "name": "ChainAccountRemoved",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "user",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "dApp",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "name",
+        "type": "string"
+      }
+    ],
+    "name": "DAppAuthorized",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "user",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "index",
+        "type": "uint256"
+      }
+    ],
+    "name": "DAppRevoked",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "user",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "enum SocialType",
+        "name": "platform",
+        "type": "uint8"
+      },
+      {
+        "indexed": false,
+        "internalType": "string",
+        "name": "handle",
+        "type": "string"
+      }
+    ],
+    "name": "SocialAccountLinked",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "user",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "index",
+        "type": "uint256"
+      }
+    ],
+    "name": "SocialAccountRemoved",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "user",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "enum SocialType",
+        "name": "platform",
+        "type": "uint8"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "index",
+        "type": "uint256"
+      }
+    ],
+    "name": "SocialAccountVerified",
+    "type": "event"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "activityLog",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "action",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "app",
+        "type": "string"
+      },
+      {
+        "internalType": "enum ActivityStatus",
+        "name": "status",
+        "type": "uint8"
+      },
+      {
+        "internalType": "uint256",
+        "name": "timestamp",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "string",
+        "name": "_name",
+        "type": "string"
+      },
+      {
+        "internalType": "address",
+        "name": "_dAppAddress",
+        "type": "address"
+      }
+    ],
+    "name": "authorizeDApp",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "authorizedDApps",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "name",
+        "type": "string"
+      },
+      {
+        "internalType": "address",
+        "name": "dAppAddress",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "authorizedAt",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "lastAccessed",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bool",
+        "name": "active",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "chainAccounts",
+    "outputs": [
+      {
+        "internalType": "enum ChainType",
+        "name": "chain",
+        "type": "uint8"
+      },
+      {
+        "internalType": "string",
+        "name": "label",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "accountAddress",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "tag",
+        "type": "string"
+      },
+      {
+        "internalType": "uint256",
+        "name": "linkedAt",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bool",
+        "name": "active",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_user",
+        "type": "address"
+      }
+    ],
+    "name": "getAuthorizedDApps",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "string",
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "internalType": "address",
+            "name": "dAppAddress",
+            "type": "address"
+          },
+          {
+            "internalType": "uint256",
+            "name": "authorizedAt",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "lastAccessed",
+            "type": "uint256"
+          },
+          {
+            "internalType": "bool",
+            "name": "active",
+            "type": "bool"
+          }
+        ],
+        "internalType": "struct AuthorizedDApp[]",
+        "name": "",
+        "type": "tuple[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_user",
+        "type": "address"
+      }
+    ],
+    "name": "getLinkedChainAccounts",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "enum ChainType",
+            "name": "chain",
+            "type": "uint8"
+          },
+          {
+            "internalType": "string",
+            "name": "label",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "accountAddress",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "tag",
+            "type": "string"
+          },
+          {
+            "internalType": "uint256",
+            "name": "linkedAt",
+            "type": "uint256"
+          },
+          {
+            "internalType": "bool",
+            "name": "active",
+            "type": "bool"
+          }
+        ],
+        "internalType": "struct LinkedChainAccount[]",
+        "name": "",
+        "type": "tuple[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_user",
+        "type": "address"
+      }
+    ],
+    "name": "getLinkedSocialAccounts",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "enum SocialType",
+            "name": "platform",
+            "type": "uint8"
+          },
+          {
+            "internalType": "string",
+            "name": "handle",
+            "type": "string"
+          },
+          {
+            "internalType": "bool",
+            "name": "verified",
+            "type": "bool"
+          },
+          {
+            "internalType": "uint256",
+            "name": "linkedAt",
+            "type": "uint256"
+          },
+          {
+            "internalType": "bool",
+            "name": "active",
+            "type": "bool"
+          }
+        ],
+        "internalType": "struct LinkedSocialAccount[]",
+        "name": "",
+        "type": "tuple[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_user",
+        "type": "address"
+      }
+    ],
+    "name": "getRecentActivity",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "string",
+            "name": "action",
+            "type": "string"
+          },
+          {
+            "internalType": "string",
+            "name": "app",
+            "type": "string"
+          },
+          {
+            "internalType": "enum ActivityStatus",
+            "name": "status",
+            "type": "uint8"
+          },
+          {
+            "internalType": "uint256",
+            "name": "timestamp",
+            "type": "uint256"
+          }
+        ],
+        "internalType": "struct ActivityEntry[]",
+        "name": "",
+        "type": "tuple[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "identity",
+    "outputs": [
+      {
+        "internalType": "contract IPolkaMeIdentity",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "enum ChainType",
+        "name": "_chain",
+        "type": "uint8"
+      },
+      {
+        "internalType": "string",
+        "name": "_label",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "_address",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "_tag",
+        "type": "string"
+      }
+    ],
+    "name": "linkChainAccount",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "enum SocialType",
+        "name": "_platform",
+        "type": "uint8"
+      },
+      {
+        "internalType": "string",
+        "name": "_handle",
+        "type": "string"
+      }
+    ],
+    "name": "linkSocialAccount",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "string",
+        "name": "_action",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "_app",
+        "type": "string"
+      },
+      {
+        "internalType": "enum ActivityStatus",
+        "name": "_status",
+        "type": "uint8"
+      }
+    ],
+    "name": "logActivity",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "owner",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "_index",
+        "type": "uint256"
+      }
+    ],
+    "name": "removeChainAccount",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "_index",
+        "type": "uint256"
+      }
+    ],
+    "name": "removeSocialAccount",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "_index",
+        "type": "uint256"
+      }
+    ],
+    "name": "revokeDApp",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "socialAccounts",
+    "outputs": [
+      {
+        "internalType": "enum SocialType",
+        "name": "platform",
+        "type": "uint8"
+      },
+      {
+        "internalType": "string",
+        "name": "handle",
+        "type": "string"
+      },
+      {
+        "internalType": "bool",
+        "name": "verified",
+        "type": "bool"
+      },
+      {
+        "internalType": "uint256",
+        "name": "linkedAt",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bool",
+        "name": "active",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_user",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "_index",
+        "type": "uint256"
+      }
+    ],
+    "name": "verifySocialAccount",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+]
