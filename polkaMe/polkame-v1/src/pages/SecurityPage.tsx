@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { useActiveAccount, ConnectButton } from "thirdweb/react";
+import { client } from "../client";
 import { Toggle, Badge } from "../components/common";
 import {
   getHardwareWallets,
@@ -9,7 +11,10 @@ import {
   updatePrivacyPreference,
   revokeSession,
   revokeAllRemoteSessions,
+  initPrivacyPrefs,
+  createSession,
 } from "../api";
+import { ensureHardhatNetwork, resetSigner } from "../contracts";
 import type {
   HardwareWallet,
   PrivacyPreference,
@@ -18,27 +23,233 @@ import type {
 } from "../types";
 
 export default function SecurityPage() {
+  const activeAccount = useActiveAccount();
   const [wallets, setWallets] = useState<HardwareWallet[]>([]);
   const [prefs, setPrefs] = useState<PrivacyPreference[]>([]);
   const [sessions, setSessions] = useState<ActiveSession[]>([]);
   const [logs, setLogs] = useState<SecurityLogEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [initingPrefs, setInitingPrefs] = useState(false);
+  const [creatingSession, setCreatingSession] = useState(false);
+  const [showSeedPhrase, setShowSeedPhrase] = useState(false);
+  const [seedPassword, setSeedPassword] = useState("");
+  const [seedRevealed, setSeedRevealed] = useState(false);
+
+  async function loadAll() {
+    setLoading(true);
+    setError(null);
+    try {
+      if (!activeAccount?.address) { setLoading(false); return; }
+      await ensureHardhatNetwork();
+      const [hw, pp, ss, sl] = await Promise.all([
+        getHardwareWallets(),
+        getPrivacyPreferences(activeAccount?.address),
+        getActiveSessions(activeAccount?.address),
+        getSecurityLog(activeAccount?.address),
+      ]);
+      if (hw.success) setWallets(hw.data);
+      if (pp.success) setPrefs(pp.data);
+      if (ss.success) setSessions(ss.data);
+      if (sl.success) setLogs(sl.data);
+    } catch (e: any) {
+      setError(e.message || "Failed to load");
+    }
+    setLoading(false);
+  }
 
   useEffect(() => {
-    getHardwareWallets().then((r) => r.success && setWallets(r.data));
-    getPrivacyPreferences().then((r) => r.success && setPrefs(r.data));
-    getActiveSessions().then((r) => r.success && setSessions(r.data));
-    getSecurityLog().then((r) => r.success && setLogs(r.data));
+    if (activeAccount?.address) { resetSigner(); loadAll(); }
+  }, [activeAccount?.address]);
+
+  useEffect(() => {
+    const eth = (window as any).ethereum;
+    if (eth) {
+      const handler = () => { resetSigner(); loadAll(); };
+      eth.on("accountsChanged", handler);
+      return () => eth.removeListener("accountsChanged", handler);
+    }
   }, []);
 
   const togglePref = async (id: string, val: boolean) => {
     setPrefs((p) =>
       p.map((pp) => (pp.id === id ? { ...pp, enabled: val } : pp)),
     );
-    await updatePrivacyPreference(id, val);
+    const res = await updatePrivacyPreference(id, val);
+    if (!res.success) {
+      // Revert
+      setPrefs((p) => p.map((pp) => (pp.id === id ? { ...pp, enabled: !val } : pp)));
+      alert("Toggle error: " + res.error);
+    }
   };
+
+  async function handleInitPrefs() {
+    setInitingPrefs(true);
+    const res = await initPrivacyPrefs();
+    if (res.success) { await loadAll(); }
+    else { alert("Init prefs error: " + res.error); }
+    setInitingPrefs(false);
+  }
+
+  async function handleCreateSession() {
+    setCreatingSession(true);
+    const ua = navigator.userAgent;
+    let device = "Desktop";
+    if (ua.includes("Windows")) device = "Windows PC";
+    else if (ua.includes("Mac")) device = "MacBook";
+    else if (ua.includes("Linux")) device = "Linux PC";
+    else if (ua.includes("iPhone")) device = "iPhone";
+    else if (ua.includes("Android")) device = "Android";
+    let browser = "Browser";
+    if (ua.includes("Chrome") && !ua.includes("Edg")) browser = "Chrome";
+    else if (ua.includes("Firefox")) browser = "Firefox";
+    else if (ua.includes("Safari") && !ua.includes("Chrome")) browser = "Safari";
+    else if (ua.includes("Edg")) browser = "Edge";
+    const res = await createSession(device, browser, "Local");
+    if (res.success) { await loadAll(); }
+    else { alert("Session error: " + res.error); }
+    setCreatingSession(false);
+  }
+
+  function handleRevealPhrase() {
+    setShowSeedPhrase(true);
+    setSeedRevealed(false);
+    setSeedPassword("");
+  }
+
+  function handleConfirmReveal() {
+    if (seedPassword === "polkame-demo") {
+      setSeedRevealed(true);
+    } else {
+      alert("Incorrect password. Hint: polkame-demo");
+    }
+  }
+
+  function handleDownloadEncrypted() {
+    const content = [
+      "PolkaMe — Encrypted Seed Phrase Backup (DEMO)",
+      "================================================",
+      "",
+      "This is a demonstration file. In a real application,",
+      "this would contain your AES-256 encrypted seed phrase.",
+      "",
+      `Wallet: ${activeAccount?.address || "unknown"}`,
+      `Generated: ${new Date().toISOString()}`,
+      `Algorithm: AES-256-GCM`,
+      `Format: Base64`,
+      "",
+      "--- ENCRYPTED PAYLOAD (DEMO) ---",
+      btoa(`demo-seed-phrase-${activeAccount?.address}-${Date.now()}`),
+      "--- END ---",
+    ].join("\n");
+    const blob = new Blob([content], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "polkame-seed-backup.enc.txt";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleRevokeSession(id: string) {
+    const res = await revokeSession(id);
+    if (res.success) { await loadAll(); }
+    else { alert("Revoke error: " + res.error); }
+  }
+
+  async function handleRevokeAll() {
+    if (!confirm("Revoke all remote sessions?")) return;
+    const res = await revokeAllRemoteSessions();
+    if (res.success) { await loadAll(); }
+    else { alert("Error: " + res.error); }
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-4 py-20">
+        <span className="material-symbols-outlined text-6xl text-red-400">error</span>
+        <p className="text-red-400 text-lg font-bold">{error}</p>
+        <button onClick={loadAll} className="px-6 py-2 bg-primary text-white rounded-lg font-bold">Retry</button>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="animate-spin size-12 border-4 border-primary border-t-transparent rounded-full" />
+      </div>
+    );
+  }
+
+  if (!activeAccount) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-8 py-20 animate-fade-in-up">
+        <div className="size-24 bg-primary/20 rounded-full flex items-center justify-center">
+          <span className="material-symbols-outlined text-5xl text-primary">security</span>
+        </div>
+        <div className="text-center">
+          <h2 className="text-3xl font-black">Connect &amp; Secure</h2>
+          <p className="text-text-muted mt-2 max-w-md">Connect your wallet to manage security settings.</p>
+        </div>
+        <ConnectButton client={client} appMetadata={{ name: "PolkaMe", url: "https://polkame.io" }} />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-8 max-w-5xl page-enter">
+      {/* Seed Phrase Modal */}
+      {showSeedPhrase && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center" onClick={() => setShowSeedPhrase(false)}>
+          <div className="bg-background-dark border border-neutral-border rounded-xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-bold flex items-center gap-2">
+              <span className="material-symbols-outlined text-red-400">warning</span>
+              Reveal Seed Phrase
+            </h3>
+            {!seedRevealed ? (
+              <>
+                <p className="text-sm text-slate-400">
+                  Your seed phrase is the master key to your wallet. <strong className="text-white">Never share it with anyone.</strong>
+                </p>
+                <p className="text-xs text-amber-400">Enter password to reveal (demo password: <code>polkame-demo</code>)</p>
+                <input
+                  type="password"
+                  placeholder="Enter password..."
+                  value={seedPassword}
+                  onChange={(e) => setSeedPassword(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleConfirmReveal()}
+                  className="w-full h-10 px-3 bg-neutral-muted border border-neutral-border rounded-lg text-white placeholder-text-muted"
+                  autoFocus
+                />
+                <div className="flex gap-2">
+                  <button onClick={() => setShowSeedPhrase(false)} className="flex-1 h-10 bg-neutral-border rounded-lg font-bold text-sm">Cancel</button>
+                  <button onClick={handleConfirmReveal} className="flex-1 h-10 bg-red-600 text-white rounded-lg font-bold text-sm">Reveal</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="bg-red-500/5 border border-red-500/20 rounded-lg p-4">
+                  <p className="text-xs text-red-400 font-bold mb-3">DO NOT share this with anyone!</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {["abandon","ability","able","about","above","absent","absorb","abstract","absurd","abuse","access","accident","account","accuse","achieve","acid","acoustic","acquire","across","act","action","actor","actress","actual"].map((w, i) => (
+                      <div key={i} className="flex items-center gap-1 text-xs">
+                        <span className="text-text-muted w-5 text-right">{i+1}.</span>
+                        <span className="font-mono text-white">{w}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-amber-400 mt-3 italic">This is a demo seed phrase. Real phrases are managed by your wallet (MetaMask).</p>
+                </div>
+                <button onClick={() => setShowSeedPhrase(false)} className="w-full h-10 bg-neutral-border rounded-lg font-bold text-sm">Close</button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div>
         <h2 className="text-3xl font-black tracking-tight">
@@ -72,10 +283,16 @@ export default function SecurityPage() {
                 ask for this.
               </p>
               <div className="flex gap-3">
-                <button className="px-5 py-2.5 bg-primary text-white rounded-lg text-sm font-bold shadow-md hover:opacity-90 transition-all duration-200 hover:scale-[1.03] active:scale-[0.97] hover-glow">
+                <button
+                  onClick={handleRevealPhrase}
+                  className="px-5 py-2.5 bg-primary text-white rounded-lg text-sm font-bold shadow-md hover:opacity-90 transition-all duration-200 hover:scale-[1.03] active:scale-[0.97] hover-glow"
+                >
                   Reveal Phrase
                 </button>
-                <button className="px-5 py-2.5 bg-primary/10 text-primary rounded-lg text-sm font-bold hover:bg-primary/20 transition-all duration-200 hover:scale-[1.03] active:scale-[0.97]">
+                <button
+                  onClick={handleDownloadEncrypted}
+                  className="px-5 py-2.5 bg-primary/10 text-primary rounded-lg text-sm font-bold hover:bg-primary/20 transition-all duration-200 hover:scale-[1.03] active:scale-[0.97]"
+                >
                   Download Encrypted
                 </button>
               </div>
@@ -145,7 +362,15 @@ export default function SecurityPage() {
             Privacy Preferences
           </h3>
           <div className="bg-background-dark border border-primary/20 rounded-xl divide-y divide-primary/10">
-            {prefs.map((p) => (
+            {prefs.length === 0 ? (
+              <div className="p-6 text-center">
+                <p className="text-sm text-slate-400 mb-3">No privacy preferences initialized yet.</p>
+                <button onClick={handleInitPrefs} disabled={initingPrefs}
+                  className="px-4 py-2 bg-primary text-white rounded-lg text-sm font-bold disabled:opacity-50 flex items-center justify-center gap-2 mx-auto">
+                  {initingPrefs ? <div className="animate-spin size-4 border-2 border-white border-t-transparent rounded-full" /> : "Initialize Preferences"}
+                </button>
+              </div>
+            ) : prefs.map((p) => (
               <Toggle
                 key={p.id}
                 label={p.label}
@@ -159,13 +384,25 @@ export default function SecurityPage() {
 
         {/* Sessions */}
         <section className="flex flex-col gap-4 animate-slide-in-right">
-          <h3 className="text-xl font-bold flex items-center gap-2">
-            <span className="material-symbols-outlined text-primary hover-wiggle">
-              devices
-            </span>
-            Active Sessions
-          </h3>
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold flex items-center gap-2">
+              <span className="material-symbols-outlined text-primary hover-wiggle">
+                devices
+              </span>
+              Active Sessions
+            </h3>
+            <button onClick={handleCreateSession} disabled={creatingSession}
+              className="text-primary text-xs font-bold hover:underline flex items-center gap-1 disabled:opacity-50">
+              {creatingSession ? <div className="animate-spin size-3 border-2 border-primary border-t-transparent rounded-full" /> : <span className="material-symbols-outlined text-xs">add</span>}
+              Register Session
+            </button>
+          </div>
           <div className="bg-background-dark border border-primary/20 rounded-xl overflow-hidden">
+            {sessions.length === 0 && (
+              <div className="p-6 text-center text-sm text-slate-400">
+                No active sessions. Click "Register Session" to add your current device.
+              </div>
+            )}
             {sessions.map((s) => (
               <div
                 key={s.id}
@@ -196,7 +433,7 @@ export default function SecurityPage() {
                   <Badge variant="primary">Active</Badge>
                 ) : (
                   <button
-                    onClick={() => revokeSession(s.id)}
+                    onClick={() => handleRevokeSession(s.id)}
                     className="text-red-500 hover:text-red-600 transition-colors"
                   >
                     <span className="material-symbols-outlined text-xl">
@@ -208,7 +445,7 @@ export default function SecurityPage() {
             ))}
             <div className="p-3 bg-primary/5 text-center">
               <button
-                onClick={() => revokeAllRemoteSessions()}
+                onClick={handleRevokeAll}
                 className="text-xs font-bold text-primary hover:underline"
               >
                 Revoke All Remote Sessions

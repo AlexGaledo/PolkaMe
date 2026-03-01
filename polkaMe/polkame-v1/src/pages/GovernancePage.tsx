@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { useActiveAccount, ConnectButton } from "thirdweb/react";
+import { client } from "../client";
 import { Badge } from "../components/common";
 import {
   getStakingMetrics,
@@ -6,22 +8,179 @@ import {
   getValidators,
   voteOnProposal,
   claimStakingRewards,
+  stakeTokens,
+  createProposal,
 } from "../api";
+import { ensureHardhatNetwork, resetSigner } from "../contracts";
 import type { StakingMetrics, Proposal, Validator } from "../types";
 
 export default function GovernancePage() {
+  const activeAccount = useActiveAccount();
   const [metrics, setMetrics] = useState<StakingMetrics | null>(null);
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [validators, setValidators] = useState<Validator[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // ── Modal states ────────────────────────────────────────────
+  const [showStake, setShowStake] = useState(false);
+  const [stakeAmount, setStakeAmount] = useState("");
+  const [staking, setStaking] = useState(false);
+  const [showNewProposal, setShowNewProposal] = useState(false);
+  const [proposalForm, setProposalForm] = useState({ title: "", description: "", days: "7" });
+  const [creatingProposal, setCreatingProposal] = useState(false);
+  const [voting, setVoting] = useState<string | null>(null); // id being voted on
+  const [claiming, setClaiming] = useState(false);
+
+  async function loadAll() {
+    setLoading(true);
+    setError(null);
+    try {
+      if (!activeAccount?.address) { setLoading(false); return; }
+      await ensureHardhatNetwork();
+      const [m, p, v] = await Promise.all([
+        getStakingMetrics(activeAccount?.address),
+        getActiveProposals(),
+        getValidators(),
+      ]);
+      if (m.success) setMetrics(m.data);
+      if (p.success) setProposals(p.data);
+      if (v.success) setValidators(v.data);
+    } catch (e: any) {
+      setError(e.message || "Failed to load");
+    }
+    setLoading(false);
+  }
 
   useEffect(() => {
-    getStakingMetrics().then((r) => r.success && setMetrics(r.data));
-    getActiveProposals().then((r) => r.success && setProposals(r.data));
-    getValidators().then((r) => r.success && setValidators(r.data));
+    if (activeAccount?.address) { resetSigner(); loadAll(); }
+  }, [activeAccount?.address]);
+
+  useEffect(() => {
+    const eth = (window as any).ethereum;
+    if (eth) {
+      const handler = () => { resetSigner(); loadAll(); };
+      eth.on("accountsChanged", handler);
+      return () => eth.removeListener("accountsChanged", handler);
+    }
   }, []);
+
+  async function handleStake() {
+    if (!stakeAmount || parseFloat(stakeAmount) <= 0) return;
+    setStaking(true);
+    const res = await stakeTokens(stakeAmount);
+    if (res.success) {
+      setShowStake(false); setStakeAmount("");
+      await loadAll();
+    } else { alert("Stake error: " + res.error); }
+    setStaking(false);
+  }
+
+  async function handleCreateProposal() {
+    if (!proposalForm.title.trim() || !proposalForm.description.trim()) return;
+    setCreatingProposal(true);
+    const res = await createProposal(proposalForm.title, proposalForm.description, parseInt(proposalForm.days) || 7);
+    if (res.success) {
+      setShowNewProposal(false); setProposalForm({ title: "", description: "", days: "7" });
+      await loadAll();
+    } else { alert("Proposal error: " + res.error); }
+    setCreatingProposal(false);
+  }
+
+  async function handleVote(id: string, vote: "aye" | "nay") {
+    setVoting(id);
+    const res = await voteOnProposal(id, vote);
+    if (!res.success) alert("Vote error: " + res.error);
+    await loadAll();
+    setVoting(null);
+  }
+
+  async function handleClaim() {
+    setClaiming(true);
+    const res = await claimStakingRewards();
+    if (res.success) { await loadAll(); } else { alert("Claim error: " + res.error); }
+    setClaiming(false);
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-4 py-20">
+        <span className="material-symbols-outlined text-6xl text-red-400">error</span>
+        <p className="text-red-400 text-lg font-bold">{error}</p>
+        <button onClick={loadAll} className="px-6 py-2 bg-primary text-white rounded-lg font-bold">Retry</button>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="animate-spin size-12 border-4 border-primary border-t-transparent rounded-full" />
+      </div>
+    );
+  }
+
+  if (!activeAccount) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-8 py-20 animate-fade-in-up">
+        <div className="size-24 bg-primary/20 rounded-full flex items-center justify-center">
+          <span className="material-symbols-outlined text-5xl text-primary">how_to_vote</span>
+        </div>
+        <div className="text-center">
+          <h2 className="text-3xl font-black">Connect &amp; Participate</h2>
+          <p className="text-text-muted mt-2 max-w-md">Connect your wallet to access governance features.</p>
+        </div>
+        <ConnectButton client={client} appMetadata={{ name: "PolkaMe", url: "https://polkame.io" }} />
+      </div>
+    );
+  }
 
   return (
     <>
+      {/* ─── Stake Modal ──────────────────────────────────── */}
+      {showStake && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center" onClick={() => setShowStake(false)}>
+          <div className="bg-background-dark border border-neutral-border rounded-xl p-6 w-full max-w-sm space-y-4" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-bold">Stake Tokens</h3>
+            <input type="number" step="0.01" min="0" placeholder="Amount in DOT" value={stakeAmount}
+              onChange={e => setStakeAmount(e.target.value)}
+              className="w-full h-10 px-3 bg-neutral-muted border border-neutral-border rounded-lg text-white placeholder-text-muted" />
+            <div className="flex gap-2">
+              <button onClick={() => setShowStake(false)} className="flex-1 h-10 bg-neutral-border rounded-lg font-bold text-sm">Cancel</button>
+              <button onClick={handleStake} disabled={staking || !stakeAmount}
+                className="flex-1 h-10 bg-primary text-white rounded-lg font-bold text-sm disabled:opacity-50 flex items-center justify-center">
+                {staking ? <div className="animate-spin size-5 border-2 border-white border-t-transparent rounded-full" /> : "Stake"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── New Proposal Modal ───────────────────────────── */}
+      {showNewProposal && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center" onClick={() => setShowNewProposal(false)}>
+          <div className="bg-background-dark border border-neutral-border rounded-xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-bold">Create Proposal</h3>
+            <input placeholder="Proposal title" value={proposalForm.title}
+              onChange={e => setProposalForm({ ...proposalForm, title: e.target.value })}
+              className="w-full h-10 px-3 bg-neutral-muted border border-neutral-border rounded-lg text-white placeholder-text-muted" />
+            <textarea placeholder="Describe your proposal..." rows={4} value={proposalForm.description}
+              onChange={e => setProposalForm({ ...proposalForm, description: e.target.value })}
+              className="w-full px-3 py-2 bg-neutral-muted border border-neutral-border rounded-lg text-white placeholder-text-muted resize-none" />
+            <input type="number" min="1" placeholder="Duration (days)" value={proposalForm.days}
+              onChange={e => setProposalForm({ ...proposalForm, days: e.target.value })}
+              className="w-full h-10 px-3 bg-neutral-muted border border-neutral-border rounded-lg text-white placeholder-text-muted" />
+            <div className="flex gap-2">
+              <button onClick={() => setShowNewProposal(false)} className="flex-1 h-10 bg-neutral-border rounded-lg font-bold text-sm">Cancel</button>
+              <button onClick={handleCreateProposal} disabled={creatingProposal || !proposalForm.title.trim()}
+                className="flex-1 h-10 bg-primary text-white rounded-lg font-bold text-sm disabled:opacity-50 flex items-center justify-center">
+                {creatingProposal ? <div className="animate-spin size-5 border-2 border-white border-t-transparent rounded-full" /> : "Create"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ─── Metric cards ──────────────────────────────────── */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <MetricCard
@@ -30,10 +189,13 @@ export default function GovernancePage() {
           unit="DOT"
           className="animate-fade-in-up stagger-1"
           footnote={
-            <span className="text-emerald-500 text-sm font-medium flex items-center gap-1">
-              <span className="material-symbols-outlined text-xs">trending_up</span>
-              +{metrics?.stakeChangePercent ?? 0}% vs last era
-            </span>
+            <button
+              onClick={() => setShowStake(true)}
+              className="text-primary text-sm font-bold hover:underline flex items-center gap-1"
+            >
+              <span className="material-symbols-outlined text-xs">add</span>
+              Stake More
+            </button>
           }
         />
         <MetricCard
@@ -43,10 +205,15 @@ export default function GovernancePage() {
           className="animate-fade-in-up stagger-2"
           footnote={
             <button
-              onClick={() => claimStakingRewards()}
-              className="text-primary text-sm font-bold hover:underline"
+              onClick={handleClaim}
+              disabled={claiming}
+              className="text-primary text-sm font-bold hover:underline disabled:opacity-50 flex items-center gap-1"
             >
-              Claim All Rewards
+              {claiming ? (
+                <div className="animate-spin size-4 border-2 border-primary border-t-transparent rounded-full" />
+              ) : (
+                <>Claim All Rewards</>
+              )}
             </button>
           }
         />
@@ -137,22 +304,27 @@ export default function GovernancePage() {
       <div>
         <div className="flex items-center justify-between mb-6">
           <h3 className="text-xl font-bold">Active Proposals</h3>
-          <a
-            href="#"
+          <button
+            onClick={() => setShowNewProposal(true)}
             className="text-primary text-sm font-semibold flex items-center gap-1 hover:underline"
           >
-            View All
-            <span className="material-symbols-outlined text-sm">
-              arrow_forward
-            </span>
-          </a>
+            <span className="material-symbols-outlined text-sm">add</span>
+            New Proposal
+          </button>
         </div>
         <div className="space-y-4">
+          {proposals.length === 0 && (
+            <div className="text-center py-12 text-text-muted">
+              <span className="material-symbols-outlined text-4xl mb-2">how_to_vote</span>
+              <p>No proposals yet. Be the first to create one!</p>
+            </div>
+          )}
           {proposals.map((p) => (
             <ProposalCard
               key={p.id}
               proposal={p}
-              onVote={(id) => voteOnProposal(id, "aye")}
+              voting={voting === p.id}
+              onVote={(id, vote) => handleVote(id, vote)}
             />
           ))}
         </div>
@@ -236,10 +408,12 @@ const TAG_COLORS: Record<string, string> = {
 
 function ProposalCard({
   proposal,
+  voting,
   onVote,
 }: {
   proposal: Proposal;
-  onVote: (id: string) => void;
+  voting: boolean;
+  onVote: (id: string, vote: "aye" | "nay") => void;
 }) {
   return (
     <div className="p-6 rounded-xl bg-primary/5 border border-primary/20 hover:border-primary/40 hover-lift transition-all duration-300">
@@ -283,12 +457,26 @@ function ProposalCard({
             />
           </div>
           <div className="flex gap-2">
-            <button
-              onClick={() => onVote(proposal.id)}
-              className="flex-1 bg-primary text-white py-2 rounded-lg text-sm font-bold shadow-lg shadow-primary/20"
-            >
-              Vote
-            </button>
+            {voting ? (
+              <div className="flex-1 flex items-center justify-center py-2">
+                <div className="animate-spin size-5 border-2 border-primary border-t-transparent rounded-full" />
+              </div>
+            ) : (
+              <>
+                <button
+                  onClick={() => onVote(proposal.id, "aye")}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg text-sm font-bold shadow-lg"
+                >
+                  Aye
+                </button>
+                <button
+                  onClick={() => onVote(proposal.id, "nay")}
+                  className="flex-1 bg-rose-600 hover:bg-rose-700 text-white py-2 rounded-lg text-sm font-bold shadow-lg"
+                >
+                  Nay
+                </button>
+              </>
+            )}
             <button className="px-3 py-2 border border-primary/20 rounded-lg hover:bg-primary/5">
               <span className="material-symbols-outlined text-sm">share</span>
             </button>
