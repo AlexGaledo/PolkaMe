@@ -8,3 +8,5 @@ export { default as StatCard } from "./StatCard";
 export { default as SearchInput } from "./SearchInput";
 export { default as SearchDropdown } from "./SearchDropdown";
 export { default as NotificationDropdown } from "./NotificationDropdown";
+export { default as WalletToggle } from "./WalletToggle";
+
