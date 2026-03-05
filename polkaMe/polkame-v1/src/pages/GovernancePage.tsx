@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useActiveAccount, ConnectButton } from "thirdweb/react";
+import { ConnectButton } from "thirdweb/react";
 import { client } from "../client";
 import { Badge } from "../components/common";
 import {
@@ -12,10 +12,11 @@ import {
   createProposal,
 } from "../api";
 import { ensureHardhatNetwork, resetSigner } from "../contracts";
+import { useWallet } from "../contexts/WalletContext";
 import type { StakingMetrics, Proposal, Validator } from "../types";
 
 export default function GovernancePage() {
-  const activeAccount = useActiveAccount();
+  const { walletMode, activeAddress, isConnected, connectPolkadot } = useWallet();
   const [metrics, setMetrics] = useState<StakingMetrics | null>(null);
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [validators, setValidators] = useState<Validator[]>([]);
@@ -36,10 +37,10 @@ export default function GovernancePage() {
     setLoading(true);
     setError(null);
     try {
-      if (!activeAccount?.address) { setLoading(false); return; }
-      await ensureHardhatNetwork();
+      if (!activeAddress) { setLoading(false); return; }
+      if (walletMode === "evm") await ensureHardhatNetwork();
       const [m, p, v] = await Promise.all([
-        getStakingMetrics(activeAccount?.address),
+        getStakingMetrics(activeAddress),
         getActiveProposals(),
         getValidators(),
       ]);
@@ -53,17 +54,21 @@ export default function GovernancePage() {
   }
 
   useEffect(() => {
-    if (activeAccount?.address) { resetSigner(); loadAll(); }
-  }, [activeAccount?.address]);
+    if (activeAddress) {
+      if (walletMode === "evm") resetSigner();
+      loadAll();
+    }
+  }, [activeAddress, walletMode]);
 
   useEffect(() => {
+    if (walletMode !== "evm") return;
     const eth = (window as any).ethereum;
     if (eth) {
       const handler = () => { resetSigner(); loadAll(); };
       eth.on("accountsChanged", handler);
       return () => eth.removeListener("accountsChanged", handler);
     }
-  }, []);
+  }, [walletMode]);
 
   async function handleStake() {
     if (!stakeAmount || parseFloat(stakeAmount) <= 0) return;
@@ -120,7 +125,7 @@ export default function GovernancePage() {
     );
   }
 
-  if (!activeAccount) {
+  if (!isConnected) {
     return (
       <div className="flex flex-col items-center justify-center gap-8 py-20 animate-fade-in-up">
         <div className="size-24 bg-primary/20 rounded-full flex items-center justify-center">
@@ -128,9 +133,19 @@ export default function GovernancePage() {
         </div>
         <div className="text-center">
           <h2 className="text-3xl font-black">Connect &amp; Participate</h2>
-          <p className="text-text-muted mt-2 max-w-md">Connect your wallet to access governance features.</p>
+          <p className="text-text-muted mt-2 max-w-md">Connect your {walletMode === "evm" ? "EVM" : "Polkadot"} wallet to access governance features.</p>
         </div>
-        <ConnectButton client={client} appMetadata={{ name: "PolkaMe", url: "https://polkame.io" }} />
+        {walletMode === "evm" ? (
+          <ConnectButton client={client} appMetadata={{ name: "PolkaMe", url: "https://polkame.io" }} />
+        ) : (
+          <button
+            onClick={() => connectPolkadot().catch((e: any) => alert(e.message))}
+            className="h-14 px-8 bg-gradient-to-r from-pink-500 to-primary text-white text-lg font-bold rounded-xl hover:opacity-90 transition-opacity flex items-center gap-2"
+          >
+            <span className="material-symbols-outlined">hub</span>
+            Connect Polkadot.js
+          </button>
+        )}
       </div>
     );
   }

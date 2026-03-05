@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useActiveAccount, ConnectButton } from "thirdweb/react";
+import { ConnectButton } from "thirdweb/react";
 import { client } from "../client";
 import { ProgressBar } from "../components/common";
 import {
@@ -10,10 +10,11 @@ import {
   linkSocialAccountAPI,
 } from "../api";
 import { ensureHardhatNetwork } from "../contracts";
+import { useWallet } from "../contexts/WalletContext";
 import type { VerificationProgress, VerificationStatus, LinkedSocialAccount } from "../types";
 
 export default function VerificationPage() {
-  const activeAccount = useActiveAccount();
+  const { walletMode, activeAddress, isConnected, connectPolkadot } = useWallet();
   const [progress, setProgress] = useState<VerificationProgress | null>(null);
   const [verStatus, setVerStatus] = useState<VerificationStatus | null>(null);
   const [socials, setSocials] = useState<LinkedSocialAccount[]>([]);
@@ -27,21 +28,20 @@ export default function VerificationPage() {
   const [socialHandle, setSocialHandle] = useState("");
 
   function reloadAll() {
-    if (!activeAccount?.address) return;
-    const addr = activeAccount.address;
-    getVerificationProgress(addr).then((r) => r.success && setProgress(r.data));
-    getVerificationStatus(addr).then((r) => r.success && setVerStatus(r.data));
-    getLinkedSocialAccounts(addr).then((r) => r.success && setSocials(r.data));
+    if (!activeAddress) return;
+    getVerificationProgress(activeAddress).then((r) => r.success && setProgress(r.data));
+    getVerificationStatus(activeAddress).then((r) => r.success && setVerStatus(r.data));
+    getLinkedSocialAccounts(activeAddress).then((r) => r.success && setSocials(r.data));
   }
 
   useEffect(() => {
     reloadAll();
-  }, [activeAccount?.address]);
+  }, [activeAddress, walletMode]);
 
   async function handleVerifyWallet() {
     setSubmitting("wallet");
     try {
-      await ensureHardhatNetwork();
+      if (walletMode === "evm") await ensureHardhatNetwork();
       const res = await submitVerification("wallet");
       if (res.success) reloadAll();
       else alert("Error: " + (res.error || "Unknown"));
@@ -55,7 +55,7 @@ export default function VerificationPage() {
     if (!socialHandle.trim()) return;
     setSubmitting("social");
     try {
-      await ensureHardhatNetwork();
+      if (walletMode === "evm") await ensureHardhatNetwork();
       const linkRes = await linkSocialAccountAPI(socialModal.platform, socialHandle.trim());
       if (!linkRes.success) {
         alert("Link error: " + linkRes.error);
@@ -79,7 +79,7 @@ export default function VerificationPage() {
   async function handleStartKYC() {
     setSubmitting("kyc");
     try {
-      await ensureHardhatNetwork();
+      if (walletMode === "evm") await ensureHardhatNetwork();
       const res = await submitVerification("kyc");
       if (res.success) reloadAll();
       else alert("Error: " + (res.error || "Unknown"));
@@ -93,7 +93,7 @@ export default function VerificationPage() {
     return socials.find((s) => s.platform === platform);
   }
 
-  if (!activeAccount) {
+  if (!isConnected) {
     return (
       <div className="flex flex-col items-center justify-center gap-8 py-20 animate-fade-in-up">
         <div className="size-24 bg-primary/20 rounded-full flex items-center justify-center">
@@ -102,16 +102,25 @@ export default function VerificationPage() {
         <div className="text-center">
           <h2 className="text-3xl font-black">Connect &amp; Verify</h2>
           <p className="text-text-muted mt-2 max-w-md">
-            Connect your wallet to verify your identity and unlock premium features.
+            Connect your {walletMode === "evm" ? "EVM" : "Polkadot"} wallet to verify your identity and unlock premium features.
           </p>
         </div>
-        <ConnectButton client={client} appMetadata={{ name: "PolkaMe", url: "https://polkame.io" }} />
+        {walletMode === "evm" ? (
+          <ConnectButton client={client} appMetadata={{ name: "PolkaMe", url: "https://polkame.io" }} />
+        ) : (
+          <button
+            onClick={() => connectPolkadot().catch((e: any) => alert(e.message))}
+            className="h-14 px-8 bg-gradient-to-r from-pink-500 to-primary text-white text-lg font-bold rounded-xl hover:opacity-90 transition-opacity flex items-center gap-2"
+          >
+            <span className="material-symbols-outlined">hub</span>
+            Connect Polkadot.js
+          </button>
+        )}
       </div>
     );
   }
 
-  const addr = activeAccount.address;
-  const shortAddr = `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+  const shortAddr = `${activeAddress.slice(0, 6)}...${activeAddress.slice(-4)}`;
 
   const PLATFORM_LABELS: Record<string, string> = {
     twitter: "X (Twitter)",
@@ -229,7 +238,7 @@ export default function VerificationPage() {
           <p className="text-sm font-bold text-emerald-400">
             Wallet Connected
           </p>
-          <p className="text-xs text-slate-400 font-mono">{addr}</p>
+          <p className="text-xs text-slate-400 font-mono">{activeAddress}</p>
         </div>
         <span className="px-2 py-1 bg-emerald-500/20 text-emerald-400 text-[10px] font-bold rounded-full uppercase">
           Active

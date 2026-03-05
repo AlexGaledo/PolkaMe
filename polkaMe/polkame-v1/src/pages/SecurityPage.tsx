@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useActiveAccount, ConnectButton } from "thirdweb/react";
+import { ConnectButton } from "thirdweb/react";
 import { client } from "../client";
 import { Toggle, Badge } from "../components/common";
 import {
@@ -15,6 +15,7 @@ import {
   createSession,
 } from "../api";
 import { ensureHardhatNetwork, resetSigner } from "../contracts";
+import { useWallet } from "../contexts/WalletContext";
 import type {
   HardwareWallet,
   PrivacyPreference,
@@ -23,7 +24,7 @@ import type {
 } from "../types";
 
 export default function SecurityPage() {
-  const activeAccount = useActiveAccount();
+  const { walletMode, activeAddress, isConnected, connectPolkadot } = useWallet();
   const [wallets, setWallets] = useState<HardwareWallet[]>([]);
   const [prefs, setPrefs] = useState<PrivacyPreference[]>([]);
   const [sessions, setSessions] = useState<ActiveSession[]>([]);
@@ -40,13 +41,13 @@ export default function SecurityPage() {
     setLoading(true);
     setError(null);
     try {
-      if (!activeAccount?.address) { setLoading(false); return; }
-      await ensureHardhatNetwork();
+      if (!activeAddress) { setLoading(false); return; }
+      if (walletMode === "evm") await ensureHardhatNetwork();
       const [hw, pp, ss, sl] = await Promise.all([
         getHardwareWallets(),
-        getPrivacyPreferences(activeAccount?.address),
-        getActiveSessions(activeAccount?.address),
-        getSecurityLog(activeAccount?.address),
+        getPrivacyPreferences(activeAddress),
+        getActiveSessions(activeAddress),
+        getSecurityLog(activeAddress),
       ]);
       if (hw.success) setWallets(hw.data);
       if (pp.success) setPrefs(pp.data);
@@ -59,17 +60,21 @@ export default function SecurityPage() {
   }
 
   useEffect(() => {
-    if (activeAccount?.address) { resetSigner(); loadAll(); }
-  }, [activeAccount?.address]);
+    if (activeAddress) {
+      if (walletMode === "evm") resetSigner();
+      loadAll();
+    }
+  }, [activeAddress, walletMode]);
 
   useEffect(() => {
+    if (walletMode !== "evm") return;
     const eth = (window as any).ethereum;
     if (eth) {
       const handler = () => { resetSigner(); loadAll(); };
       eth.on("accountsChanged", handler);
       return () => eth.removeListener("accountsChanged", handler);
     }
-  }, []);
+  }, [walletMode]);
 
   const togglePref = async (id: string, val: boolean) => {
     setPrefs((p) =>
@@ -133,13 +138,13 @@ export default function SecurityPage() {
       "This is a demonstration file. In a real application,",
       "this would contain your AES-256 encrypted seed phrase.",
       "",
-      `Wallet: ${activeAccount?.address || "unknown"}`,
+      `Wallet: ${activeAddress || "unknown"}`,
       `Generated: ${new Date().toISOString()}`,
       `Algorithm: AES-256-GCM`,
       `Format: Base64`,
       "",
       "--- ENCRYPTED PAYLOAD (DEMO) ---",
-      btoa(`demo-seed-phrase-${activeAccount?.address}-${Date.now()}`),
+      btoa(`demo-seed-phrase-${activeAddress}-${Date.now()}`),
       "--- END ---",
     ].join("\n");
     const blob = new Blob([content], { type: "text/plain" });
@@ -184,7 +189,7 @@ export default function SecurityPage() {
     );
   }
 
-  if (!activeAccount) {
+  if (!isConnected) {
     return (
       <div className="flex flex-col items-center justify-center gap-8 py-20 animate-fade-in-up">
         <div className="size-24 bg-primary/20 rounded-full flex items-center justify-center">
@@ -192,9 +197,19 @@ export default function SecurityPage() {
         </div>
         <div className="text-center">
           <h2 className="text-3xl font-black">Connect &amp; Secure</h2>
-          <p className="text-text-muted mt-2 max-w-md">Connect your wallet to manage security settings.</p>
+          <p className="text-text-muted mt-2 max-w-md">Connect your {walletMode === "evm" ? "EVM" : "Polkadot"} wallet to manage security settings.</p>
         </div>
-        <ConnectButton client={client} appMetadata={{ name: "PolkaMe", url: "https://polkame.io" }} />
+        {walletMode === "evm" ? (
+          <ConnectButton client={client} appMetadata={{ name: "PolkaMe", url: "https://polkame.io" }} />
+        ) : (
+          <button
+            onClick={() => connectPolkadot().catch((e: any) => alert(e.message))}
+            className="h-14 px-8 bg-gradient-to-r from-pink-500 to-primary text-white text-lg font-bold rounded-xl hover:opacity-90 transition-opacity flex items-center gap-2"
+          >
+            <span className="material-symbols-outlined">hub</span>
+            Connect Polkadot.js
+          </button>
+        )}
       </div>
     );
   }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useActiveAccount, ConnectButton } from "thirdweb/react";
+import { ConnectButton } from "thirdweb/react";
 import { client } from "../client";
 import { Badge } from "../components/common";
 import {
@@ -18,6 +18,7 @@ import {
   searchUser,
 } from "../api";
 import { ensureHardhatNetwork, resetSigner } from "../contracts";
+import { useWallet } from "../contexts/WalletContext";
 import type {
   Identity,
   VerificationStatus,
@@ -28,20 +29,19 @@ import type {
 } from "../types";
 
 export default function DashboardPage() {
-  const activeAccount = useActiveAccount();
+  const { walletMode, activeAddress, isConnected, connectPolkadot } = useWallet();
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [verification, setVerification] = useState<VerificationStatus | null>(null);
   const [chains, setChains] = useState<LinkedChainAccount[]>([]);
   const [socials, setSocials] = useState<LinkedSocialAccount[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [dApps, setDApps] = useState<AuthorizedDApp[]>([]);
-  const [hasDID, setHasDID] = useState<boolean | null>(null); // null = loading
+  const [hasDID, setHasDID] = useState<boolean | null>(null);
   const [creating, setCreating] = useState(false);
   const [nameInput, setNameInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // ── Modal states ────────────────────────────────────────────
   const [showLinkChain, setShowLinkChain] = useState(false);
   const [showLinkSocial, setShowLinkSocial] = useState(false);
   const [chainForm, setChainForm] = useState({ chain: "polkadot", label: "", address: "", tag: "Primary" });
@@ -55,19 +55,18 @@ export default function DashboardPage() {
     setLoading(true);
     setError(null);
     try {
-      const addr = activeAccount?.address;
-      if (!addr) { setLoading(false); return; }
-      await ensureHardhatNetwork();
-      const has = await checkHasDID(addr);
+      if (!activeAddress) { setLoading(false); return; }
+      if (walletMode === "evm") await ensureHardhatNetwork();
+      const has = await checkHasDID(activeAddress);
       setHasDID(has);
       if (!has) { setLoading(false); return; }
       const [id, ver, ch, so, act, da] = await Promise.all([
-        getUserIdentity(addr),
-        getVerificationStatus(addr),
-        getLinkedChainAccounts(addr),
-        getLinkedSocialAccounts(addr),
-        getRecentActivity(addr),
-        getAuthorizedDApps(addr),
+        getUserIdentity(activeAddress),
+        getVerificationStatus(activeAddress),
+        getLinkedChainAccounts(activeAddress),
+        getLinkedSocialAccounts(activeAddress),
+        getRecentActivity(activeAddress),
+        getAuthorizedDApps(activeAddress),
       ]);
       if (id.success) setIdentity(id.data);
       if (ver.success) setVerification(ver.data);
@@ -82,26 +81,28 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
-    if (activeAccount?.address) {
-      resetSigner();
+    if (activeAddress) {
+      if (walletMode === "evm") resetSigner();
       loadAll();
     }
-  }, [activeAccount?.address]);
+  }, [activeAddress, walletMode]);
 
-  // Also reload on MetaMask account changes not caught by ThirdWeb
   useEffect(() => {
+    if (walletMode !== "evm") return;
     const eth = (window as any).ethereum;
     if (eth) {
       const handler = () => { resetSigner(); loadAll(); };
       eth.on("accountsChanged", handler);
       return () => eth.removeListener("accountsChanged", handler);
     }
-  }, []);
+  }, [walletMode]);
 
   async function handleCreateDID() {
     if (!nameInput.trim()) return;
     setCreating(true);
-    try { await ensureHardhatNetwork(); } catch (e: any) { alert(e.message); setCreating(false); return; }
+    if (walletMode === "evm") {
+      try { await ensureHardhatNetwork(); } catch (e: any) { alert(e.message); setCreating(false); return; }
+    }
     const res = await createDID(nameInput.trim());
     if (res.success) {
       setHasDID(true);
@@ -119,7 +120,7 @@ export default function DashboardPage() {
     if (res.success) {
       setShowLinkChain(false);
       setChainForm({ chain: "polkadot", label: "", address: "", tag: "Primary" });
-      getLinkedChainAccounts(activeAccount?.address).then((r) => { if (r.success) setChains(r.data); });
+      getLinkedChainAccounts(activeAddress).then((r) => { if (r.success) setChains(r.data); });
     } else {
       alert("Error: " + res.error);
     }
@@ -131,7 +132,7 @@ export default function DashboardPage() {
     if (res.success) {
       setShowLinkSocial(false);
       setSocialForm({ platform: "twitter", handle: "" });
-      getLinkedSocialAccounts(activeAccount?.address).then((r) => { if (r.success) setSocials(r.data); });
+      getLinkedSocialAccounts(activeAddress).then((r) => { if (r.success) setSocials(r.data); });
     } else {
       alert("Error: " + res.error);
     }
@@ -141,7 +142,7 @@ export default function DashboardPage() {
     if (!confirm("Revoke this dApp?")) return;
     const res = await revokeDApp(id);
     if (res.success) {
-      getAuthorizedDApps(activeAccount?.address).then((r) => { if (r.success) setDApps(r.data); });
+      getAuthorizedDApps(activeAddress).then((r) => { if (r.success) setDApps(r.data); });
     }
   }
 
@@ -151,7 +152,7 @@ export default function DashboardPage() {
     if (res.success) {
       setShowAuthDApp(false);
       setDAppForm({ name: "", address: "" });
-      getAuthorizedDApps(activeAccount?.address).then((r) => { if (r.success) setDApps(r.data); });
+      getAuthorizedDApps(activeAddress).then((r) => { if (r.success) setDApps(r.data); });
     } else {
       alert("Error: " + res.error);
     }
@@ -164,7 +165,6 @@ export default function DashboardPage() {
     setSearchResult(res.success ? res.data : []);
   }
 
-  // ── Error / Loading states ──────────────────────────────────
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center gap-4 py-20">
@@ -185,8 +185,7 @@ export default function DashboardPage() {
     );
   }
 
-  // ── Not connected ───────────────────────────────────────────
-  if (!activeAccount) {
+  if (!isConnected) {
     return (
       <div className="flex flex-col items-center justify-center gap-8 py-20 animate-fade-in-up">
         <div className="size-24 bg-primary/20 rounded-full flex items-center justify-center">
@@ -195,15 +194,24 @@ export default function DashboardPage() {
         <div className="text-center">
           <h2 className="text-3xl font-black">Connect &amp; Create Your Identity</h2>
           <p className="text-text-muted mt-2 max-w-md">
-            Connect your wallet to access your decentralized identity on PolkaMe.
+            Connect your {walletMode === "evm" ? "EVM" : "Polkadot"} wallet to access your decentralized identity on PolkaMe.
           </p>
         </div>
-        <ConnectButton client={client} appMetadata={{ name: "PolkaMe", url: "https://polkame.io" }} />
+        {walletMode === "evm" ? (
+          <ConnectButton client={client} appMetadata={{ name: "PolkaMe", url: "https://polkame.io" }} />
+        ) : (
+          <button
+            onClick={() => connectPolkadot().catch((e: any) => alert(e.message))}
+            className="h-14 px-8 bg-gradient-to-r from-pink-500 to-primary text-white text-lg font-bold rounded-xl hover:opacity-90 transition-opacity flex items-center gap-2"
+          >
+            <span className="material-symbols-outlined">hub</span>
+            Connect Polkadot.js
+          </button>
+        )}
       </div>
     );
   }
 
-  // ── No DID — onboarding ─────────────────────────────────────
   if (!hasDID) {
     return (
       <div className="flex flex-col items-center justify-center gap-8 py-20 animate-fade-in-up">
@@ -247,7 +255,6 @@ export default function DashboardPage() {
 
   return (
     <>
-      {/* ─── Search results overlay ────────────────────────── */}
       {searchResult !== undefined && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center" onClick={() => setSearchResult(undefined)}>
           <div className="bg-background-dark border border-neutral-border rounded-xl p-6 w-full max-w-md" onClick={e => e.stopPropagation()}>
@@ -255,7 +262,7 @@ export default function DashboardPage() {
             {searchResult.length > 0 ? (
               <div className="space-y-3 max-h-80 overflow-y-auto">
                 {searchResult.map((r) => {
-                  const isYou = activeAccount?.address?.toLowerCase() === r.walletAddress.toLowerCase();
+                  const isYou = activeAddress?.toLowerCase() === r.walletAddress.toLowerCase();
                   return (
                     <div key={r.walletAddress} className="flex items-center gap-3 p-3 rounded-lg bg-neutral-muted/50 hover:bg-neutral-muted transition-colors">
                       <div className="size-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold">
@@ -284,7 +291,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* ─── Link Chain Modal ──────────────────────────────── */}
       {showLinkChain && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center" onClick={() => setShowLinkChain(false)}>
           <div className="bg-background-dark border border-neutral-border rounded-xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
@@ -314,7 +320,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* ─── Link Social Modal ─────────────────────────────── */}
       {showLinkSocial && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center" onClick={() => setShowLinkSocial(false)}>
           <div className="bg-background-dark border border-neutral-border rounded-xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
@@ -336,7 +341,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* ─── Authorize dApp Modal ──────────────────────────── */}
       {showAuthDApp && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center" onClick={() => setShowAuthDApp(false)}>
           <div className="bg-background-dark border border-neutral-border rounded-xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
@@ -356,24 +360,21 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* ─── Title row ─────────────────────────────────────── */}
       <div className="flex flex-wrap items-end justify-between gap-6 animate-fade-in-down">
         <div>
           <h3 className="text-3xl font-black tracking-tight">
             Identity Overview
           </h3>
           <p className="text-text-muted mt-1">
-            Manage your decentralized identifiers and linked cross-chain
-            accounts.
+            Manage your decentralized identifiers and linked cross-chain accounts.
           </p>
         </div>
-        {/* Search */}
         <div className="flex items-center gap-2">
           <input
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             onKeyDown={e => e.key === "Enter" && handleSearch(searchQuery)}
-            placeholder="Search by 0x address..."
+            placeholder="Search by address..."
             className="h-10 px-3 bg-neutral-muted border border-neutral-border rounded-lg text-white placeholder-text-muted text-sm w-60"
           />
           <button
@@ -385,9 +386,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ─── Score + Verification ──────────────────────────── */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Score card */}
         <div className="col-span-1 md:col-span-2 bg-gradient-to-br from-neutral-muted to-background-dark border border-neutral-border rounded-xl p-6 flex flex-col justify-between animate-fade-in-up hover-glow">
           <div className="flex justify-between items-start">
             <div>
@@ -396,7 +395,7 @@ export default function DashboardPage() {
               </p>
               <div className="flex items-baseline gap-2 mt-2">
                 <span className="text-5xl font-black">
-                  {identity?.score ?? "—"}
+                  {identity?.score ?? "\u2014"}
                 </span>
                 <span className="text-text-muted text-xl font-bold">/ 100</span>
               </div>
@@ -419,7 +418,6 @@ export default function DashboardPage() {
           </p>
         </div>
 
-        {/* Verification status */}
         <div className="bg-neutral-muted border border-neutral-border rounded-xl p-6 flex flex-col gap-4 animate-fade-in-up stagger-2">
           <h4 className="font-bold text-sm uppercase tracking-wider text-text-muted">
             Verification Status
@@ -429,44 +427,42 @@ export default function DashboardPage() {
               (
                 Object.entries(verification) as [string, string][]
               ).map(([key, val]) => (
-                <div
-                  key={key}
-                  className="flex items-center justify-between text-sm"
-                >
-                  <span className="flex items-center gap-2">
-                    <span
-                      className={`material-symbols-outlined text-sm ${
-                        val === "verified"
-                          ? "text-primary"
-                          : "text-text-muted"
-                      }`}
-                    >
-                      {val === "verified" ? "check_circle" : "circle"}
-                    </span>
-                    <span className="capitalize">{key}</span>
-                  </span>
+              <div
+                key={key}
+                className="flex items-center justify-between text-sm"
+              >
+                <span className="flex items-center gap-2">
                   <span
-                    className={
+                    className={`material-symbols-outlined text-sm ${
                       val === "verified"
-                        ? "text-primary font-medium"
-                        : "text-text-muted italic"
-                    }
+                        ? "text-primary"
+                        : "text-text-muted"
+                    }`}
                   >
-                    {val === "verified"
-                      ? "Verified"
-                      : val === "pending"
-                        ? "Pending"
-                        : "—"}
+                    {val === "verified" ? "check_circle" : "circle"}
                   </span>
-                </div>
-              ))}
+                  <span className="capitalize">{key}</span>
+                </span>
+                <span
+                  className={
+                    val === "verified"
+                      ? "text-primary font-medium"
+                      : "text-text-muted italic"
+                  }
+                >
+                  {val === "verified"
+                    ? "Verified"
+                    : val === "pending"
+                      ? "Pending"
+                      : "\u2014"}
+                </span>
+              </div>
+            ))}
           </div>
         </div>
       </div>
 
-      {/* ─── Accounts & dApps grid ─────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/* Linked accounts */}
         <div className="lg:col-span-8 flex flex-col gap-4">
           <h4 className="text-xl font-bold animate-fade-in">Linked Accounts</h4>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -476,7 +472,6 @@ export default function DashboardPage() {
             {socials.map((s) => (
               <SocialCard key={s.id} account={s} />
             ))}
-            {/* Add chain button */}
             <button
               onClick={() => setShowLinkChain(true)}
               className="border border-dashed border-neutral-border p-4 rounded-xl hover:bg-primary/5 transition-all duration-300 flex flex-col items-center justify-center gap-2 group hover:border-primary/50 hover:scale-[1.02]"
@@ -488,7 +483,6 @@ export default function DashboardPage() {
                 Link Chain Account
               </span>
             </button>
-            {/* Add social button */}
             <button
               onClick={() => setShowLinkSocial(true)}
               className="border border-dashed border-neutral-border p-4 rounded-xl hover:bg-primary/5 transition-all duration-300 flex flex-col items-center justify-center gap-2 group hover:border-primary/50 hover:scale-[1.02]"
@@ -502,7 +496,6 @@ export default function DashboardPage() {
             </button>
           </div>
 
-          {/* Recent Activity */}
           <div className="mt-8">
             <h4 className="text-xl font-bold mb-4 animate-fade-in">Recent Activity</h4>
             <div className="bg-neutral-muted/30 border border-neutral-border rounded-xl overflow-hidden animate-fade-in-up">
@@ -552,7 +545,6 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Authorized dApps */}
         <div className="lg:col-span-4 flex flex-col gap-4 animate-slide-in-right">
           <div className="flex items-center justify-between">
             <h4 className="text-xl font-bold">Authorized dApps</h4>
@@ -610,7 +602,6 @@ export default function DashboardPage() {
             )}
           </div>
 
-          {/* Security tip */}
           <div className="bg-primary/10 border border-primary/20 rounded-xl p-4 mt-4 animate-fade-in-up hover-glow">
             <div className="flex gap-3">
               <span className="material-symbols-outlined text-primary">
@@ -632,8 +623,6 @@ export default function DashboardPage() {
     </>
   );
 }
-
-/* ─── Sub-components ───────────────────────────────────────────────── */
 
 function ChainCard({ account }: { account: LinkedChainAccount }) {
   return (
