@@ -1,0 +1,185 @@
+================================================================================
+  PolkaMe Backend API Guide
+  Endpoints expected by the frontend (Polkadot-native mode)
+================================================================================
+
+Base URL:  Configured via VITE_BACKEND_URL env variable
+Default:   http://localhost:3001/api
+
+All endpoints return JSON with shape:
+  { data: <T>, success: boolean, error?: string }
+
+================================================================================
+  IDENTITY
+================================================================================
+
+GET    /api/identity/has-did?address={address}
+       Returns: { hasDID: boolean }
+
+POST   /api/identity/create
+       Body: { displayName: string, address: string }
+       Returns: { data: Identity }
+
+GET    /api/identity/{address}
+       Returns: { data: Identity }
+
+GET    /api/identity/{address}/verification-status
+       Returns: { data: VerificationStatus }
+
+GET    /api/identity/{address}/verification-progress
+       Returns: { data: { currentStep, totalSteps, percentComplete } }
+
+POST   /api/identity/{address}/verify
+       Body: { method: "wallet" | "social" | "kyc" }
+       Returns: { data: { submitted: boolean } }
+
+GET    /api/identity/search?q={query}
+       Returns: { data: Identity[] }
+
+GET    /api/identity/stats
+       Returns: { data: PlatformStats }
+
+
+================================================================================
+  ACCOUNTS
+================================================================================
+
+GET    /api/accounts/{address}/chains
+       Returns: { data: LinkedChainAccount[] }
+
+POST   /api/accounts/{address}/chains
+       Body: { chain, label, chainAddress, tag }
+       Returns: { data: { linked: boolean } }
+
+GET    /api/accounts/{address}/socials
+       Returns: { data: LinkedSocialAccount[] }
+
+POST   /api/accounts/{address}/socials
+       Body: { platform: "twitter"|"discord"|"github", handle: string }
+       Returns: { data: { linked: boolean } }
+
+GET    /api/accounts/{address}/dapps
+       Returns: { data: AuthorizedDApp[] }
+
+POST   /api/accounts/{address}/dapps
+       Body: { name: string, dAppAddress: string }
+       Returns: { data: { authorized: boolean } }
+
+DELETE /api/accounts/{address}/dapps/{dAppId}
+       Returns: { data: { revoked: boolean } }
+
+GET    /api/accounts/{address}/activity
+       Returns: { data: ActivityEntry[] }
+
+
+================================================================================
+  GOVERNANCE
+================================================================================
+
+GET    /api/governance/{address}/staking
+       Returns: { data: StakingMetrics }
+
+POST   /api/governance/{address}/stake
+       Body: { amount: string }
+       Returns: { data: { staked: boolean } }
+
+POST   /api/governance/{address}/claim
+       Returns: { data: { claimed: boolean, amount: string } }
+
+GET    /api/governance/proposals
+       Returns: { data: Proposal[] }
+
+POST   /api/governance/proposals
+       Body: { address, title, description, durationDays }
+       Returns: { data: { created: boolean } }
+
+POST   /api/governance/proposals/{proposalId}/vote
+       Body: { address: string, vote: "aye"|"nay" }
+       Returns: { data: { voted: boolean } }
+
+GET    /api/governance/validators
+       Returns: { data: Validator[] }
+
+
+================================================================================
+  SECURITY
+================================================================================
+
+GET    /api/security/{address}/privacy
+       Returns: { data: PrivacyPreference[] }
+
+POST   /api/security/{address}/privacy/init
+       Returns: { data: { initialized: boolean } }
+
+PATCH  /api/security/{address}/privacy/{prefId}
+       Body: { enabled: boolean }
+       Returns: { data: { updated: boolean } }
+
+GET    /api/security/{address}/sessions
+       Returns: { data: ActiveSession[] }
+
+POST   /api/security/{address}/sessions
+       Body: { device, browser, location }
+       Returns: { data: { created: boolean } }
+
+DELETE /api/security/{address}/sessions/{sessionId}
+       Returns: { data: { revoked: boolean } }
+
+DELETE /api/security/{address}/sessions
+       (Revokes all remote sessions)
+       Returns: { data: { revoked: boolean } }
+
+GET    /api/security/{address}/log
+       Returns: { data: SecurityLogEntry[] }
+
+
+================================================================================
+  TYPE DEFINITIONS (TypeScript reference)
+================================================================================
+
+Identity:
+  id, displayName, walletAddress, polkadotAddress?, score, scoreChange,
+  createdAt, updatedAt
+
+VerificationStatus:
+  email, governance, socials, kyc  (each: "verified"|"pending"|"unverified")
+
+LinkedChainAccount:
+  id, chain, label, address, balance, tag, logoColor
+
+LinkedSocialAccount:
+  id, platform, handle, verified, linkedAt
+
+ActivityEntry:
+  id, action, icon, app, status, timestamp
+
+AuthorizedDApp:
+  id, name, lastLogin, logoLetter, logoBgColor
+
+StakingMetrics:
+  totalStaked, claimableRewards, votingPower, votingWeight,
+  stakingApyTrend, currentApy, participationPct, totalVotes,
+  stakeChangePercent
+
+Proposal:
+  id, refNum, tag, tagColor, title, description, ayePct, nayPct, endsIn
+
+Validator:
+  id, shortName, initials, commission, selfStake, rewards24h, status
+
+VerificationProgress:
+  currentStep, totalSteps, percentComplete
+
+PrivacyPreference:
+  id, label, description, enabled
+
+ActiveSession:
+  id, device, browser, location, isCurrent, lastActive, icon
+
+SecurityLogEntry:
+  id, event, source, timestamp
+
+PlatformStats:
+  users, parachains, credentials
+
+================================================================================
