@@ -1,6 +1,8 @@
 import { Link, useLocation } from "react-router-dom";
 import { ConnectButton } from "thirdweb/react";
 import { client } from "../../client";
+import { WalletToggle } from "../common";
+import { useWallet } from "../../contexts/WalletContext";
 
 const NAV_LINKS = [
   { to: "/", label: "Features", hash: "#features" },
@@ -11,11 +13,15 @@ const NAV_LINKS = [
 
 export default function PublicHeader() {
   const { pathname } = useLocation();
+  const { walletMode, isConnected, activeAddress, connectPolkadot } = useWallet();
+
+  const shortAddr = activeAddress
+    ? `${activeAddress.slice(0, 6)}...${activeAddress.slice(-4)}`
+    : null;
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-primary/10 bg-background-dark/80 backdrop-blur-md">
       <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
-        {/* Logo */}
         <Link to="/" className="flex items-center gap-3 group">
           <div className="bg-primary p-2 rounded-lg group-hover:rotate-12 transition-transform duration-300">
             <span className="material-symbols-outlined text-white text-2xl">
@@ -27,7 +33,6 @@ export default function PublicHeader() {
           </span>
         </Link>
 
-        {/* Desktop nav */}
         <nav className="hidden md:flex items-center gap-10">
           {NAV_LINKS.map((l) => (
             <Link
@@ -44,16 +49,25 @@ export default function PublicHeader() {
           ))}
         </nav>
 
-        {/* Actions */}
         <div className="flex items-center gap-4">
           <div className="hidden sm:block">
-            <ConnectButton
-              client={client}
-              appMetadata={{
-                name: "PolkaMe",
-                url: "https://polkame.io",
-              }}
-            />
+            <WalletToggle compact />
+          </div>
+          <div className="hidden sm:block">
+            {walletMode === "evm" ? (
+              <ConnectButton
+                client={client}
+                appMetadata={{ name: "PolkaMe", url: "https://polkame.io" }}
+              />
+            ) : (
+              <button
+                onClick={() => connectPolkadot().catch((e: any) => alert(e.message))}
+                className="py-2 px-4 bg-gradient-to-r from-pink-500 to-primary text-white text-sm font-bold rounded-xl hover:opacity-90 transition-opacity flex items-center gap-2"
+              >
+                <span className="material-symbols-outlined text-base">hub</span>
+                {isConnected ? shortAddr : "Connect Polkadot"}
+              </button>
+            )}
           </div>
           <button className="md:hidden text-slate-100">
             <span className="material-symbols-outlined">menu</span>

@@ -30,3 +30,18 @@ design_modules
 *.env.local
 *.env.development.local
 *.env.test.local
+
+# Lock files (team uses npm)
+yarn.lock
+
+# Personal notes
+TODO_NEXT_STEPS.txt
+
+# Hardhat / Solidity build artifacts
+practice_contracts/artifacts/
+practice_contracts/cache/
+practice_contracts/node_modules/
+practice_contracts/node_log.txt
+practice_contracts/node_error.txt
+practice_contracts/node_output.txt
+practice_contracts/node.log
