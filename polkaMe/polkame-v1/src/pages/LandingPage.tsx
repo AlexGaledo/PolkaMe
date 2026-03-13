@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { StatCard } from "../components/common";
-import { getPlatformStats } from "../api";
+import { getPlatformStats } from "../api/backend";
 import type { PlatformStats } from "../types";
 
 export default function LandingPage() {
@@ -62,12 +62,14 @@ export default function LandingPage() {
           </div>
 
           {/* Visual column */}
+          {/* eslint-disable-next-line react/forbid-dom-props */}
           <div className="relative hidden lg:block animate-scale-in" style={{ animationDelay: '0.3s' }}>
             <div className="absolute -inset-4 bg-primary/20 rounded-full blur-3xl opacity-20 animate-glow-pulse" />
             <div className="relative aspect-square w-full max-w-[500px] mx-auto bg-gradient-to-br from-primary/10 to-transparent rounded-3xl border border-white/10 p-8 flex items-center justify-center overflow-hidden">
               {/* Decorative graphic */}
               <div className="grid grid-cols-4 gap-3 w-full h-full opacity-30">
                 {Array.from({ length: 16 }).map((_, i) => (
+                  // eslint-disable-next-line react/forbid-dom-props
                   <div
                     key={i}
                     className="rounded-xl bg-primary/20 animate-pulse"

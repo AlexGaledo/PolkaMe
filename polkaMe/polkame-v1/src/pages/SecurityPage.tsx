@@ -2,18 +2,7 @@ import { useEffect, useState } from "react";
 import { ConnectButton } from "thirdweb/react";
 import { client } from "../client";
 import { Toggle, Badge } from "../components/common";
-import {
-  getHardwareWallets,
-  getPrivacyPreferences,
-  getActiveSessions,
-  getSecurityLog,
-  connectHardwareWallet,
-  updatePrivacyPreference,
-  revokeSession,
-  revokeAllRemoteSessions,
-  initPrivacyPrefs,
-  createSession,
-} from "../api";
+import { useApi } from "../api/useApi";
 import { ensureHardhatNetwork, resetSigner } from "../contracts";
 import { useWallet } from "../contexts/WalletContext";
 import type {
@@ -25,6 +14,7 @@ import type {
 
 export default function SecurityPage() {
   const { walletMode, activeAddress, isConnected, connectPolkadot } = useWallet();
+  const api = useApi();
   const [wallets, setWallets] = useState<HardwareWallet[]>([]);
   const [prefs, setPrefs] = useState<PrivacyPreference[]>([]);
   const [sessions, setSessions] = useState<ActiveSession[]>([]);
@@ -44,10 +34,10 @@ export default function SecurityPage() {
       if (!activeAddress) { setLoading(false); return; }
       if (walletMode === "evm") await ensureHardhatNetwork();
       const [hw, pp, ss, sl] = await Promise.all([
-        getHardwareWallets(),
-        getPrivacyPreferences(activeAddress),
-        getActiveSessions(activeAddress),
-        getSecurityLog(activeAddress),
+        api.getHardwareWallets(),
+        api.getPrivacyPreferences(activeAddress),
+        api.getActiveSessions(activeAddress),
+        api.getSecurityLog(activeAddress),
       ]);
       if (hw.success) setWallets(hw.data);
       if (pp.success) setPrefs(pp.data);
@@ -80,7 +70,7 @@ export default function SecurityPage() {
     setPrefs((p) =>
       p.map((pp) => (pp.id === id ? { ...pp, enabled: val } : pp)),
     );
-    const res = await updatePrivacyPreference(id, val);
+    const res = await api.updatePrivacyPreference(id, val);
     if (!res.success) {
       // Revert
       setPrefs((p) => p.map((pp) => (pp.id === id ? { ...pp, enabled: !val } : pp)));
@@ -90,7 +80,7 @@ export default function SecurityPage() {
 
   async function handleInitPrefs() {
     setInitingPrefs(true);
-    const res = await initPrivacyPrefs();
+    const res = await api.initPrivacyPrefs();
     if (res.success) { await loadAll(); }
     else { alert("Init prefs error: " + res.error); }
     setInitingPrefs(false);
@@ -110,7 +100,7 @@ export default function SecurityPage() {
     else if (ua.includes("Firefox")) browser = "Firefox";
     else if (ua.includes("Safari") && !ua.includes("Chrome")) browser = "Safari";
     else if (ua.includes("Edg")) browser = "Edge";
-    const res = await createSession(device, browser, "Local");
+    const res = await api.createSession(device, browser, "Local");
     if (res.success) { await loadAll(); }
     else { alert("Session error: " + res.error); }
     setCreatingSession(false);
@@ -159,14 +149,14 @@ export default function SecurityPage() {
   }
 
   async function handleRevokeSession(id: string) {
-    const res = await revokeSession(id);
+    const res = await api.revokeSession(id);
     if (res.success) { await loadAll(); }
     else { alert("Revoke error: " + res.error); }
   }
 
   async function handleRevokeAll() {
     if (!confirm("Revoke all remote sessions?")) return;
-    const res = await revokeAllRemoteSessions();
+    const res = await api.revokeAllRemoteSessions();
     if (res.success) { await loadAll(); }
     else { alert("Error: " + res.error); }
   }
@@ -353,7 +343,7 @@ export default function SecurityPage() {
               <p className="text-xs text-slate-400 mb-4">{w.description}</p>
               <button
                 onClick={() =>
-                  connectHardwareWallet(
+                  api.connectHardwareWallet(
                     w.id === "hw1" ? "ledger" : "trezor",
                   )
                 }

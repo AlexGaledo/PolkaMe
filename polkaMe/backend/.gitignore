@@ -1,0 +1,13 @@
+node_modules/
+dist/
+polkame.db
+.env
+.data/
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Hardhat
+artifacts/
+cache/
+typechain-types/

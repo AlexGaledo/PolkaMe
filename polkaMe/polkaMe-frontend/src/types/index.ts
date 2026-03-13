@@ -20,6 +20,7 @@ export interface VerificationStatus {
   governance: "verified" | "pending" | "unverified";
   socials: "verified" | "pending" | "unverified";
   kyc: "verified" | "pending" | "unverified";
+  dao_badge: "verified" | "pending" | "unverified";
 }
 
 // ─── Linked Accounts ─────────────────────────────────────────────────

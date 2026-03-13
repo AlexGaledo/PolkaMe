@@ -2,21 +2,14 @@ import { useEffect, useState } from "react";
 import { ConnectButton } from "thirdweb/react";
 import { client } from "../client";
 import { Badge } from "../components/common";
-import {
-  getStakingMetrics,
-  getActiveProposals,
-  getValidators,
-  voteOnProposal,
-  claimStakingRewards,
-  stakeTokens,
-  createProposal,
-} from "../api";
+import { useApi } from "../api/useApi";
 import { ensureHardhatNetwork, resetSigner } from "../contracts";
 import { useWallet } from "../contexts/WalletContext";
 import type { StakingMetrics, Proposal, Validator } from "../types";
 
 export default function GovernancePage() {
   const { walletMode, activeAddress, isConnected, connectPolkadot } = useWallet();
+  const api = useApi();
   const [metrics, setMetrics] = useState<StakingMetrics | null>(null);
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [validators, setValidators] = useState<Validator[]>([]);
@@ -40,9 +33,9 @@ export default function GovernancePage() {
       if (!activeAddress) { setLoading(false); return; }
       if (walletMode === "evm") await ensureHardhatNetwork();
       const [m, p, v] = await Promise.all([
-        getStakingMetrics(activeAddress),
-        getActiveProposals(),
-        getValidators(),
+        api.getStakingMetrics(activeAddress),
+        api.getActiveProposals(),
+        api.getValidators(),
       ]);
       if (m.success) setMetrics(m.data);
       if (p.success) setProposals(p.data);
@@ -71,39 +64,55 @@ export default function GovernancePage() {
   }, [walletMode]);
 
   async function handleStake() {
-    if (!stakeAmount || parseFloat(stakeAmount) <= 0) return;
+    if (!stakeAmount || parseFloat(stakeAmount) <= 0 || !isFinite(parseFloat(stakeAmount))) return;
     setStaking(true);
-    const res = await stakeTokens(stakeAmount);
-    if (res.success) {
-      setShowStake(false); setStakeAmount("");
-      await loadAll();
-    } else { alert("Stake error: " + res.error); }
+    try {
+      const res = await api.stakeTokens(stakeAmount);
+      if (res.success) {
+        setShowStake(false); setStakeAmount("");
+        await loadAll();
+      } else { alert("Stake error: " + res.error); }
+    } catch (e: any) {
+      alert("Stake error: " + (e.message || "Unknown"));
+    }
     setStaking(false);
   }
 
   async function handleCreateProposal() {
     if (!proposalForm.title.trim() || !proposalForm.description.trim()) return;
     setCreatingProposal(true);
-    const res = await createProposal(proposalForm.title, proposalForm.description, parseInt(proposalForm.days) || 7);
-    if (res.success) {
-      setShowNewProposal(false); setProposalForm({ title: "", description: "", days: "7" });
-      await loadAll();
-    } else { alert("Proposal error: " + res.error); }
+    try {
+      const res = await api.createProposal(proposalForm.title, proposalForm.description, parseInt(proposalForm.days) || 7);
+      if (res.success) {
+        setShowNewProposal(false); setProposalForm({ title: "", description: "", days: "7" });
+        await loadAll();
+      } else { alert("Proposal error: " + res.error); }
+    } catch (e: any) {
+      alert("Proposal error: " + (e.message || "Unknown"));
+    }
     setCreatingProposal(false);
   }
 
   async function handleVote(id: string, vote: "aye" | "nay") {
     setVoting(id);
-    const res = await voteOnProposal(id, vote);
-    if (!res.success) alert("Vote error: " + res.error);
-    await loadAll();
+    try {
+      const res = await api.voteOnProposal(id, vote);
+      if (!res.success) alert("Vote error: " + res.error);
+      await loadAll();
+    } catch (e: any) {
+      alert("Vote error: " + (e.message || "Unknown"));
+    }
     setVoting(null);
   }
 
   async function handleClaim() {
     setClaiming(true);
-    const res = await claimStakingRewards();
-    if (res.success) { await loadAll(); } else { alert("Claim error: " + res.error); }
+    try {
+      const res = await api.claimStakingRewards();
+      if (res.success) { await loadAll(); } else { alert("Claim error: " + res.error); }
+    } catch (e: any) {
+      alert("Claim error: " + (e.message || "Unknown"));
+    }
     setClaiming(false);
   }
 
@@ -257,6 +266,7 @@ export default function GovernancePage() {
           </div>
           <div className="h-48 flex items-end gap-2">
             {(metrics?.stakingApyTrend ?? Array(7).fill(0)).map((v, i) => (
+              // eslint-disable-next-line react/forbid-dom-props
               <div
                 key={i}
                 className="flex-1 bg-primary rounded-t-sm origin-bottom animate-bar-grow"
@@ -462,10 +472,12 @@ function ProposalCard({
             </span>
           </div>
           <div className="h-2 w-full bg-primary/10 rounded-full flex overflow-hidden">
+            {/* eslint-disable-next-line react/forbid-dom-props */}
             <div
               className="h-full bg-emerald-500"
               style={{ width: `${proposal.ayePct}%` }}
             />
+            {/* eslint-disable-next-line react/forbid-dom-props */}
             <div
               className="h-full bg-rose-500"
               style={{ width: `${proposal.nayPct}%` }}

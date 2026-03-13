@@ -2,19 +2,14 @@ import { useEffect, useState } from "react";
 import { ConnectButton } from "thirdweb/react";
 import { client } from "../client";
 import { ProgressBar } from "../components/common";
-import {
-  getVerificationProgress,
-  getVerificationStatus,
-  getLinkedSocialAccounts,
-  submitVerification,
-  linkSocialAccountAPI,
-} from "../api";
+import { useApi } from "../api/useApi";
 import { ensureHardhatNetwork } from "../contracts";
 import { useWallet } from "../contexts/WalletContext";
 import type { VerificationProgress, VerificationStatus, LinkedSocialAccount } from "../types";
 
 export default function VerificationPage() {
   const { walletMode, activeAddress, isConnected, connectPolkadot } = useWallet();
+  const api = useApi();
   const [progress, setProgress] = useState<VerificationProgress | null>(null);
   const [verStatus, setVerStatus] = useState<VerificationStatus | null>(null);
   const [socials, setSocials] = useState<LinkedSocialAccount[]>([]);
@@ -29,9 +24,12 @@ export default function VerificationPage() {
 
   function reloadAll() {
     if (!activeAddress) return;
-    getVerificationProgress(activeAddress).then((r) => r.success && setProgress(r.data));
-    getVerificationStatus(activeAddress).then((r) => r.success && setVerStatus(r.data));
-    getLinkedSocialAccounts(activeAddress).then((r) => r.success && setSocials(r.data));
+    api.getVerificationProgress(activeAddress).then((r) => r.success && setProgress(r.data));
+    api.getVerificationStatus(activeAddress).then((r) => r.success && setVerStatus(r.data));
+    api.getLinkedSocialAccounts(activeAddress).then((r) => {
+      if (!r.success) return;
+      setSocials(Array.isArray(r.data) ? r.data : []);
+    });
   }
 
   useEffect(() => {
@@ -42,7 +40,7 @@ export default function VerificationPage() {
     setSubmitting("wallet");
     try {
       if (walletMode === "evm") await ensureHardhatNetwork();
-      const res = await submitVerification("wallet");
+      const res = await api.submitVerification("wallet");
       if (res.success) reloadAll();
       else alert("Error: " + (res.error || "Unknown"));
     } catch (e: any) {
@@ -56,13 +54,13 @@ export default function VerificationPage() {
     setSubmitting("social");
     try {
       if (walletMode === "evm") await ensureHardhatNetwork();
-      const linkRes = await linkSocialAccountAPI(socialModal.platform, socialHandle.trim());
+      const linkRes = await api.linkSocialAccountAPI(socialModal.platform, socialHandle.trim());
       if (!linkRes.success) {
         alert("Link error: " + linkRes.error);
         setSubmitting(null);
         return;
       }
-      const verRes = await submitVerification("social");
+      const verRes = await api.submitVerification("social");
       if (verRes.success) {
         setSocialModal({ open: false, platform: "twitter" });
         setSocialHandle("");
@@ -76,21 +74,10 @@ export default function VerificationPage() {
     setSubmitting(null);
   }
 
-  async function handleStartKYC() {
-    setSubmitting("kyc");
-    try {
-      if (walletMode === "evm") await ensureHardhatNetwork();
-      const res = await submitVerification("kyc");
-      if (res.success) reloadAll();
-      else alert("Error: " + (res.error || "Unknown"));
-    } catch (e: any) {
-      alert(e.message);
-    }
-    setSubmitting(null);
-  }
+  const safeSocials = Array.isArray(socials) ? socials : [];
 
   function getLinkedSocial(platform: string) {
-    return socials.find((s) => s.platform === platform);
+    return safeSocials.find((s) => s.platform === platform);
   }
 
   if (!isConnected) {
@@ -252,7 +239,7 @@ export default function VerificationPage() {
           icon="account_balance_wallet"
           tag="Decentralized"
           title="On-chain Identity"
-          status={verStatus?.email}
+          status={verStatus?.governance}
           bgIcon="hub"
           idx={0}
         >
@@ -261,7 +248,7 @@ export default function VerificationPage() {
             <span className="font-mono text-white">{shortAddr}</span>) to prove
             on-chain identity, asset ownership, and transaction history.
           </p>
-          {verStatus?.email === "verified" ? (
+          {verStatus?.governance === "verified" ? (
             <div className="flex items-center gap-2 text-emerald-400 text-sm font-bold">
               <span className="material-symbols-outlined text-sm">
                 verified
@@ -303,9 +290,9 @@ export default function VerificationPage() {
             transaction.
           </p>
           {/* Existing linked socials */}
-          {socials.length > 0 && (
+          {safeSocials.length > 0 && (
             <div className="flex flex-wrap gap-2 my-1">
-              {socials.map((s) => (
+              {safeSocials.map((s) => (
                 <div
                   key={s.id}
                   className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-full text-sm"
@@ -347,50 +334,6 @@ export default function VerificationPage() {
           </div>
         </VCard>
 
-        {/* 3. KYC */}
-        <VCard
-          icon="badge"
-          tag="Official"
-          title="Real-world Credentials (KYC)"
-          status={verStatus?.kyc}
-          bgIcon="verified_user"
-          idx={2}
-        >
-          <p className="text-slate-400 text-sm leading-relaxed">
-            Submit a Know-Your-Customer (KYC) verification to prove your
-            real-world identity on-chain. This sets your KYC status to
-            "pending" for review.
-          </p>
-          <p className="text-xs text-amber-400/80 italic">
-            Demo mode: No real documents required. Clicking below simulates a
-            KYC submission.
-          </p>
-          {verStatus?.kyc === "verified" ? (
-            <div className="flex items-center gap-2 text-emerald-400 text-sm font-bold">
-              <span className="material-symbols-outlined text-sm">
-                verified
-              </span>
-              KYC Verified
-            </div>
-          ) : (
-            <button
-              onClick={handleStartKYC}
-              disabled={submitting !== null}
-              className="flex items-center justify-center gap-2 rounded-lg h-11 px-6 font-bold bg-primary/10 text-primary border border-primary/20 hover:bg-primary/20 transition-all w-fit disabled:opacity-50"
-            >
-              {submitting === "kyc" ? (
-                <div className="animate-spin size-5 border-2 border-white border-t-transparent rounded-full" />
-              ) : (
-                <>
-                  <span>Start KYC Verification</span>
-                  <span className="material-symbols-outlined text-sm">
-                    photo_camera
-                  </span>
-                </>
-              )}
-            </button>
-          )}
-        </VCard>
       </div>
 
       {/* ─── Privacy notice ────────────────────────────────── */}
