@@ -2,6 +2,7 @@ node_modules/
 dist/
 polkame.db
 .env
+.data/
 *.db-journal
 *.db-wal
 *.db-shm
