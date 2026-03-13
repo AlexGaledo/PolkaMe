@@ -25,7 +25,13 @@ export function useWallet(): WalletState {
 }
 
 export function WalletProvider({ children }: { children: ReactNode }) {
-  const [walletMode, setWalletMode] = useState<WalletMode>("evm");
+  const [walletMode, setWalletModeState] = useState<WalletMode>(
+    () => (localStorage.getItem("polkame_wallet_mode") as WalletMode | null) ?? "evm"
+  );
+  const setWalletMode = (mode: WalletMode) => {
+    localStorage.setItem("polkame_wallet_mode", mode);
+    setWalletModeState(mode);
+  };
   const [evmAddress, setEvmAddress] = useState("");
   const [polkadotAddress, setPolkadotAddress] = useState("");
   const [polkadotApi, setPolkadotApi] = useState<ApiPromise | null>(null);
@@ -55,7 +61,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const connectPolkadot = useCallback(async (): Promise<string> => {
-    const { web3Enable, web3Accounts } = await import("@polkadot/extension-dapp");
+    const { web3Enable, web3Accounts, web3FromAddress } = await import("@polkadot/extension-dapp");
     const extensions = await web3Enable("PolkaMe");
     if (extensions.length === 0) {
       throw new Error("No Polkadot wallet detected. Please install the Polkadot.js extension.");
@@ -68,6 +74,47 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     const addr = accounts[0].address;
     setPolkadotAddress(addr);
+
+    // ── Polkadot auth: nonce → sign → JWT ─────────────────────────
+    // Without this step every write endpoint returns 401.
+    try {
+      const apiBase =
+        import.meta.env.VITE_BACKEND_URL ||
+        (import.meta.env.VITE_API_BASE_URL ? `${import.meta.env.VITE_API_BASE_URL}/api` : null) ||
+        "http://localhost:3001/api";
+
+      // 1. Fetch a one-time challenge from the backend
+      const nonceRes  = await fetch(`${apiBase}/auth/nonce?address=${encodeURIComponent(addr)}`);
+      const nonceJson = await nonceRes.json();
+      const message   = nonceJson.data?.message as string | undefined;
+
+      if (message) {
+        // 2. Ask the Polkadot.js extension to sign the raw message
+        const injected = await web3FromAddress(addr);
+        const signRaw  = injected?.signer?.signRaw;
+
+        if (signRaw) {
+          const { signature } = await signRaw({ address: addr, data: message, type: "bytes" });
+
+          // 3. Send the signature to the backend — receive a JWT valid for 7 days
+          const verifyRes  = await fetch(`${apiBase}/auth/polkadot/verify`, {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({ address: addr, signature }),
+          });
+          const verifyJson = await verifyRes.json();
+
+          if (verifyJson.data?.token) {
+            localStorage.setItem("polkame_jwt", verifyJson.data.token);
+          }
+        }
+      }
+    } catch (authErr) {
+      // Auth failure is non-fatal for the connection UI — write calls will
+      // still fail with 401, but the user stays connected and can retry.
+      console.warn("[PolkaMe] Polkadot auth failed:", authErr);
+    }
+    // ──────────────────────────────────────────────────────────────
 
     if (!polkadotApi) {
       const { ApiPromise: Api, WsProvider } = await import("@polkadot/api");
@@ -85,6 +132,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setEvmAddress("");
     } else {
       setPolkadotAddress("");
+      localStorage.removeItem("polkame_jwt"); // invalidate stored JWT
       if (polkadotApi) {
         polkadotApi.disconnect();
         setPolkadotApi(null);

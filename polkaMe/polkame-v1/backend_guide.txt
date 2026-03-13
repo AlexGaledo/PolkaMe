@@ -9,6 +9,43 @@ Default:   http://localhost:3001/api
 All endpoints return JSON with shape:
   { data: <T>, success: boolean, error?: string }
 
+Paginated list endpoints accept ?page=1&limit=20 and return:
+  { data: { page, limit, items: <T[]> }, success: boolean }
+
+Auth header (required for Owner-protected endpoints):
+  Authorization: Bearer <JWT token from /api/auth/login or /api/auth/polkadot/verify>
+
+================================================================================
+  AUTH
+================================================================================
+
+--- EVM (thirdweb) ---
+
+GET    /api/auth/payload?address={address}
+       Returns: { data: { payload: LoginPayload } }
+       Note: Requires THIRDWEB_SECRET_KEY env var to be set
+
+POST   /api/auth/login
+       Body: { payload: LoginPayload, signature: string }
+       Returns: { data: { token: string } }
+
+--- Polkadot ---
+
+GET    /api/auth/nonce?address={address}
+       Returns: { data: { nonce: string, message: string } }
+       Note: Sign the message with Polkadot.js extension
+
+POST   /api/auth/polkadot/verify
+       Body: { address: string, signature: string }
+       Returns: { data: { token: string } }
+
+--- Session info ---
+
+GET    /api/auth/me
+       Auth: Optional (returns 401 if not authenticated)
+       Returns: { data: { address, walletType, iat, exp } }
+
+
 ================================================================================
   IDENTITY
 ================================================================================
@@ -30,8 +67,10 @@ GET    /api/identity/{address}/verification-progress
        Returns: { data: { currentStep, totalSteps, percentComplete } }
 
 POST   /api/identity/{address}/verify
-       Body: { method: "wallet" | "social" | "kyc" }
+       Auth: Owner required
+       Body: { method: "wallet" | "social" | "kyc" | "dao_badge" }
        Returns: { data: { submitted: boolean } }
+       Note: Sets the corresponding field to "pending" (manual review or on-chain check follows)
 
 GET    /api/identity/search?q={query}
        Returns: { data: Identity[] }
@@ -39,37 +78,71 @@ GET    /api/identity/search?q={query}
 GET    /api/identity/stats
        Returns: { data: PlatformStats }
 
+--- Cross-chain DID Linking (Polkadot <-> EVM mapping) ---
+
+GET    /api/identity/{address}/linked-dids
+       Returns: { data: LinkedDID[] }
+
+POST   /api/identity/{address}/linked-dids
+       Auth: Owner required
+       Body: { linkedAddress: string, didType: "evm" | "polkadot" }
+       Returns: { data: { linked: boolean } }
+       Note: This is an attestation, not an ownership proof. 409 if already linked.
+
+DELETE /api/identity/{address}/linked-dids/{linkId}
+       Auth: Owner required
+       Returns: { data: { removed: boolean } }
+
+--- DAO Badge ---
+
+POST   /api/identity/{address}/dao-badge
+       Auth: Owner required
+       Returns: { data: { granted: boolean } }
+       Note: Sets dao_badge = "verified" and adds +10 to score
+
+--- Credential Sharing (dApps requesting credential access) ---
+
+POST   /api/identity/{requesterAddress}/credential-request
+       Auth: None (public — any dApp can request)
+       Body: { targetAddress: string, credentialType: "kyc" | "socials" | "governance" | "dao_badge" }
+       Returns: { data: { credentialType, status, granted: boolean } }
+       Note: Logs the credential access request to the security_log of targetAddress
+
 
 ================================================================================
-  ACCOUNTS
+  ACCOUNTS  (all GET lists support ?page=&limit= pagination)
 ================================================================================
 
-GET    /api/accounts/{address}/chains
-       Returns: { data: LinkedChainAccount[] }
+GET    /api/accounts/{address}/chains?page=&limit=
+       Returns: { data: { page, limit, items: LinkedChainAccount[] } }
 
 POST   /api/accounts/{address}/chains
+       Auth: Owner required
        Body: { chain, label, chainAddress, tag }
        Returns: { data: { linked: boolean } }
 
-GET    /api/accounts/{address}/socials
-       Returns: { data: LinkedSocialAccount[] }
+GET    /api/accounts/{address}/socials?page=&limit=
+       Returns: { data: { page, limit, items: LinkedSocialAccount[] } }
 
 POST   /api/accounts/{address}/socials
+       Auth: Owner required
        Body: { platform: "twitter"|"discord"|"github", handle: string }
        Returns: { data: { linked: boolean } }
 
-GET    /api/accounts/{address}/dapps
-       Returns: { data: AuthorizedDApp[] }
+GET    /api/accounts/{address}/dapps?page=&limit=
+       Returns: { data: { page, limit, items: AuthorizedDApp[] } }
 
 POST   /api/accounts/{address}/dapps
+       Auth: Owner required
        Body: { name: string, dAppAddress: string }
        Returns: { data: { authorized: boolean } }
 
 DELETE /api/accounts/{address}/dapps/{dAppId}
+       Auth: Owner required
        Returns: { data: { revoked: boolean } }
 
-GET    /api/accounts/{address}/activity
-       Returns: { data: ActivityEntry[] }
+GET    /api/accounts/{address}/activity?page=&limit=
+       Returns: { data: { page, limit, items: ActivityEntry[] } }
 
 
 ================================================================================
@@ -80,20 +153,24 @@ GET    /api/governance/{address}/staking
        Returns: { data: StakingMetrics }
 
 POST   /api/governance/{address}/stake
+       Auth: Owner required
        Body: { amount: string }
        Returns: { data: { staked: boolean } }
 
 POST   /api/governance/{address}/claim
+       Auth: Owner required
        Returns: { data: { claimed: boolean, amount: string } }
 
 GET    /api/governance/proposals
        Returns: { data: Proposal[] }
 
 POST   /api/governance/proposals
+       Auth: Optional (JWT address overrides body address if provided)
        Body: { address, title, description, durationDays }
        Returns: { data: { created: boolean } }
 
 POST   /api/governance/proposals/{proposalId}/vote
+       Auth: Optional (JWT address overrides body address if provided)
        Body: { address: string, vote: "aye"|"nay" }
        Returns: { data: { voted: boolean } }
 
@@ -102,35 +179,40 @@ GET    /api/governance/validators
 
 
 ================================================================================
-  SECURITY
+  SECURITY  (/sessions and /log support ?page=&limit= pagination)
 ================================================================================
 
 GET    /api/security/{address}/privacy
-       Returns: { data: PrivacyPreference[] }
+       Returns: { data: PrivacyPreference[] }  (auto-seeded 4 defaults on first call)
 
 POST   /api/security/{address}/privacy/init
        Returns: { data: { initialized: boolean } }
 
 PATCH  /api/security/{address}/privacy/{prefId}
+       Auth: Owner required
        Body: { enabled: boolean }
        Returns: { data: { updated: boolean } }
 
-GET    /api/security/{address}/sessions
-       Returns: { data: ActiveSession[] }
+GET    /api/security/{address}/sessions?page=&limit=
+       Auth: Owner required
+       Returns: { data: { page, limit, items: ActiveSession[] } }
 
 POST   /api/security/{address}/sessions
+       Auth: Owner required
        Body: { device, browser, location }
        Returns: { data: { created: boolean } }
 
 DELETE /api/security/{address}/sessions/{sessionId}
+       Auth: Owner required
        Returns: { data: { revoked: boolean } }
 
 DELETE /api/security/{address}/sessions
-       (Revokes all remote sessions)
-       Returns: { data: { revoked: boolean } }
+       Auth: Owner required (revokes all non-current sessions)
+       Returns: { data: { revoked: boolean, count: number } }
 
-GET    /api/security/{address}/log
-       Returns: { data: SecurityLogEntry[] }
+GET    /api/security/{address}/log?page=&limit=
+       Auth: Owner required
+       Returns: { data: { page, limit, items: SecurityLogEntry[] } }
 
 
 ================================================================================
@@ -142,7 +224,11 @@ Identity:
   createdAt, updatedAt
 
 VerificationStatus:
-  email, governance, socials, kyc  (each: "verified"|"pending"|"unverified")
+  email, governance, socials, kyc, dao_badge
+  (each: "verified" | "pending" | "unverified")
+
+LinkedDID:
+  id, ownerAddress, linkedAddress, didType ("evm"|"polkadot"), createdAt
 
 LinkedChainAccount:
   id, chain, label, address, balance, tag, logoColor
@@ -181,5 +267,19 @@ SecurityLogEntry:
 
 PlatformStats:
   users, parachains, credentials
+
+================================================================================
+  SCORE BREAKDOWN
+================================================================================
+
+  base:                10
+  + chain accounts:    +5 each  (max 25)
+  + social accounts:   +10 each (max 30)
+  + socials verified:  +10
+  + governance:        +10
+  + KYC:               +15
+  + DAO badge:         +10
+  ─────────────────────────
+  MAX:                100
 
 ================================================================================

@@ -181,7 +181,7 @@ export async function getVerificationStatus(forAddress?: string): Promise<ApiRes
       email: VERIFICATION_STATE[Number(v.email)] as VerificationStatus["email"],
       governance: VERIFICATION_STATE[Number(v.governance)] as VerificationStatus["governance"],
       socials: VERIFICATION_STATE[Number(v.socials)] as VerificationStatus["socials"],
-      kyc: VERIFICATION_STATE[Number(v.kyc)] as VerificationStatus["kyc"],
+      dao_badge: "unverified",  // DAO badge is managed off-chain via backend
     });
   } catch (e: any) {
     return fail(e.message);
@@ -534,12 +534,12 @@ export async function getVerificationProgress(forAddress?: string): Promise<ApiR
 }
 
 export async function submitVerification(
-  method: "wallet" | "social" | "kyc",
+  method: "wallet" | "social",
 ): Promise<ApiResponse<{ submitted: boolean }>> {
   try {
     const identity = await getIdentityContract();
     // Map frontend method names to contract uint8 field IDs
-    const FIELD_MAP: Record<string, number> = { wallet: 0, social: 2, kyc: 3 };
+    const FIELD_MAP: Record<string, number> = { wallet: 0, social: 2 };
     const tx = await identity.submitVerification(FIELD_MAP[method] ?? 0);
     await tx.wait();
     return ok({ submitted: true });

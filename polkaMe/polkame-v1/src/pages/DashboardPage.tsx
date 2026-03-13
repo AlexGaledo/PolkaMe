@@ -2,21 +2,7 @@ import { useEffect, useState } from "react";
 import { ConnectButton } from "thirdweb/react";
 import { client } from "../client";
 import { Badge } from "../components/common";
-import {
-  getUserIdentity,
-  getVerificationStatus,
-  getLinkedChainAccounts,
-  getLinkedSocialAccounts,
-  getRecentActivity,
-  getAuthorizedDApps,
-  checkHasDID,
-  createDID,
-  linkChainAccountFull,
-  linkSocialAccountAPI,
-  revokeDApp,
-  authorizeDApp,
-  searchUser,
-} from "../api";
+import { useApi } from "../api/useApi";
 import { ensureHardhatNetwork, resetSigner } from "../contracts";
 import { useWallet } from "../contexts/WalletContext";
 import type {
@@ -30,6 +16,7 @@ import type {
 
 export default function DashboardPage() {
   const { walletMode, activeAddress, isConnected, connectPolkadot } = useWallet();
+  const api = useApi();
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [verification, setVerification] = useState<VerificationStatus | null>(null);
   const [chains, setChains] = useState<LinkedChainAccount[]>([]);
@@ -39,8 +26,10 @@ export default function DashboardPage() {
   const [hasDID, setHasDID] = useState<boolean | null>(null);
   const [creating, setCreating] = useState(false);
   const [nameInput, setNameInput] = useState("");
+  const [evmAddressInput, setEvmAddressInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isLinking, setIsLinking] = useState(false);
 
   const [showLinkChain, setShowLinkChain] = useState(false);
   const [showLinkSocial, setShowLinkSocial] = useState(false);
@@ -57,16 +46,28 @@ export default function DashboardPage() {
     try {
       if (!activeAddress) { setLoading(false); return; }
       if (walletMode === "evm") await ensureHardhatNetwork();
-      const has = await checkHasDID(activeAddress);
+      let has: boolean;
+      try {
+        has = await api.checkHasDID(activeAddress);
+      } catch (e: any) {
+        const detail = e?.message ? ` Details: ${e.message}` : "";
+        if (walletMode === "polkadot") {
+          setError(`Cannot reach backend API at http://localhost:3001/api.${detail}`);
+        } else {
+          setError(`Cannot read identity from EVM provider. Check wallet connection and Hardhat network (chainId 31337).${detail}`);
+        }
+        setLoading(false);
+        return;
+      }
       setHasDID(has);
       if (!has) { setLoading(false); return; }
       const [id, ver, ch, so, act, da] = await Promise.all([
-        getUserIdentity(activeAddress),
-        getVerificationStatus(activeAddress),
-        getLinkedChainAccounts(activeAddress),
-        getLinkedSocialAccounts(activeAddress),
-        getRecentActivity(activeAddress),
-        getAuthorizedDApps(activeAddress),
+        api.getUserIdentity(activeAddress),
+        api.getVerificationStatus(activeAddress),
+        api.getLinkedChainAccounts(activeAddress),
+        api.getLinkedSocialAccounts(activeAddress),
+        api.getRecentActivity(activeAddress),
+        api.getAuthorizedDApps(activeAddress),
       ]);
       if (id.success) setIdentity(id.data);
       if (ver.success) setVerification(ver.data);
@@ -103,7 +104,7 @@ export default function DashboardPage() {
     if (walletMode === "evm") {
       try { await ensureHardhatNetwork(); } catch (e: any) { alert(e.message); setCreating(false); return; }
     }
-    const res = await createDID(nameInput.trim());
+    const res = await api.createDID(nameInput.trim());
     if (res.success) {
       setHasDID(true);
       setIdentity(res.data);
@@ -114,54 +115,80 @@ export default function DashboardPage() {
     setCreating(false);
   }
 
+  async function handleLinkWallets() {
+    if (!evmAddressInput.trim()) return;
+    setCreating(true);
+    const res = await api.linkWallets(evmAddressInput.trim());
+    if (res.success) {
+      setHasDID(true);
+      setEvmAddressInput("");
+      await loadAll();
+    } else {
+      alert("Error: " + (res.error || "Failed to link wallets"));
+    }
+    setCreating(false);
+  }
+
   async function handleLinkChain() {
     if (!chainForm.label || !chainForm.address) return;
-    const res = await linkChainAccountFull(chainForm.chain, chainForm.label, chainForm.address, chainForm.tag);
-    if (res.success) {
-      setShowLinkChain(false);
-      setChainForm({ chain: "polkadot", label: "", address: "", tag: "Primary" });
-      getLinkedChainAccounts(activeAddress).then((r) => { if (r.success) setChains(r.data); });
-    } else {
-      alert("Error: " + res.error);
+    try {
+      const res = await api.linkChainAccountFull(chainForm.chain, chainForm.label, chainForm.address, chainForm.tag);
+      if (res.success) {
+        setShowLinkChain(false);
+        setChainForm({ chain: "polkadot", label: "", address: "", tag: "Primary" });
+        api.getLinkedChainAccounts(activeAddress).then((r) => { if (r.success) setChains(r.data); });
+      } else {
+        alert("Error: " + res.error);
+      }
+    } catch (e: any) {
+      alert("Link error: " + (e.message || "Unknown"));
     }
   }
 
   async function handleLinkSocial() {
     if (!socialForm.handle) return;
-    const res = await linkSocialAccountAPI(socialForm.platform, socialForm.handle);
-    if (res.success) {
-      setShowLinkSocial(false);
-      setSocialForm({ platform: "twitter", handle: "" });
-      getLinkedSocialAccounts(activeAddress).then((r) => { if (r.success) setSocials(r.data); });
-    } else {
-      alert("Error: " + res.error);
+    try {
+      const res = await api.linkSocialAccountAPI(socialForm.platform, socialForm.handle);
+      if (res.success) {
+        setShowLinkSocial(false);
+        setSocialForm({ platform: "twitter", handle: "" });
+        api.getLinkedSocialAccounts(activeAddress).then((r) => { if (r.success) setSocials(r.data); });
+      } else {
+        alert("Error: " + res.error);
+      }
+    } catch (e: any) {
+      alert("Link error: " + (e.message || "Unknown"));
     }
   }
 
   async function handleRevokeDApp(id: string) {
     if (!confirm("Revoke this dApp?")) return;
-    const res = await revokeDApp(id);
+    const res = await api.revokeDApp(id);
     if (res.success) {
-      getAuthorizedDApps(activeAddress).then((r) => { if (r.success) setDApps(r.data); });
+      api.getAuthorizedDApps(activeAddress).then((r) => { if (r.success) setDApps(r.data); });
     }
   }
 
   async function handleAuthorizeDApp() {
     if (!dAppForm.name.trim() || !dAppForm.address.trim()) return;
-    const res = await authorizeDApp(dAppForm.name.trim(), dAppForm.address.trim());
-    if (res.success) {
-      setShowAuthDApp(false);
-      setDAppForm({ name: "", address: "" });
-      getAuthorizedDApps(activeAddress).then((r) => { if (r.success) setDApps(r.data); });
-    } else {
-      alert("Error: " + res.error);
+    try {
+      const res = await api.authorizeDApp(dAppForm.name.trim(), dAppForm.address.trim());
+      if (res.success) {
+        setShowAuthDApp(false);
+        setDAppForm({ name: "", address: "" });
+        api.getAuthorizedDApps(activeAddress).then((r) => { if (r.success) setDApps(r.data); });
+      } else {
+        alert("Error: " + res.error);
+      }
+    } catch (e: any) {
+      alert("Authorize error: " + (e.message || "Unknown"));
     }
   }
 
   async function handleSearch(query: string) {
     setSearchQuery(query);
     if (!query || query.length < 3) { setSearchResult(undefined); return; }
-    const res = await searchUser(query);
+    const res = await api.searchUser(query);
     setSearchResult(res.success ? res.data : []);
   }
 
@@ -212,7 +239,7 @@ export default function DashboardPage() {
     );
   }
 
-  if (!hasDID) {
+  if (hasDID === false) {
     return (
       <div className="flex flex-col items-center justify-center gap-8 py-20 animate-fade-in-up">
         <div className="size-24 bg-primary/20 rounded-full flex items-center justify-center">
@@ -221,33 +248,84 @@ export default function DashboardPage() {
         <div className="text-center">
           <h2 className="text-3xl font-black">Welcome to PolkaMe</h2>
           <p className="text-text-muted mt-2 max-w-md">
-            Create your decentralized identity to get started. This will register
-            a DID on-chain tied to your wallet address.
+            Create your decentralized identity to get started. This will register a DID on-chain tied to your {walletMode === "polkadot" ? "Polkadot" : "EVM"} wallet address.
           </p>
         </div>
         <div className="flex flex-col gap-3 w-full max-w-sm">
-          <input
-            type="text"
-            placeholder="Enter your display name..."
-            value={nameInput}
-            onChange={(e) => setNameInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleCreateDID()}
-            className="h-12 px-4 bg-neutral-muted border border-neutral-border rounded-lg text-white placeholder-text-muted focus:border-primary focus:outline-none"
-          />
-          <button
-            onClick={handleCreateDID}
-            disabled={creating || !nameInput.trim()}
-            className="h-12 bg-primary hover:bg-primary/90 text-white font-bold rounded-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-          >
-            {creating ? (
-              <div className="animate-spin size-5 border-2 border-white border-t-transparent rounded-full" />
-            ) : (
-              <>
-                <span className="material-symbols-outlined">add</span>
-                Create Your Identity
-              </>
-            )}
-          </button>
+          {walletMode === "polkadot" && (
+            <div className="flex bg-neutral-muted/50 p-1 rounded-lg w-full mb-2 relative border border-neutral-border">
+              <div
+                className={`absolute inset-y-1 left-1 w-[calc(50%-4px)] bg-primary rounded-md transition-transform duration-300 ${
+                  isLinking ? "translate-x-full" : ""
+                }`}
+              />
+              <button
+                onClick={() => setIsLinking(false)}
+                className={`flex-1 py-2 text-sm font-bold rounded-md z-10 transition-colors ${
+                  !isLinking ? "text-white" : "text-text-muted hover:text-white"
+                }`}
+              >
+                Create New DID
+              </button>
+              <button
+                onClick={() => setIsLinking(true)}
+                className={`flex-1 py-2 text-sm font-bold rounded-md z-10 transition-colors ${
+                  isLinking ? "text-white" : "text-text-muted hover:text-white"
+                }`}
+              >
+                Link Existing
+              </button>
+            </div>
+          )}
+
+          {!isLinking ? (
+            <>
+              <input
+                type="text"
+                placeholder="Enter your display name..."
+                value={nameInput}
+                onChange={(e) => setNameInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleCreateDID()}
+                className="h-12 px-4 bg-neutral-muted border border-neutral-border rounded-lg text-white placeholder-text-muted focus:border-primary focus:outline-none"
+              />
+              <button
+                onClick={handleCreateDID}
+                disabled={creating || !nameInput.trim()}
+                className="h-12 bg-primary hover:bg-primary/90 text-white font-bold rounded-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                {creating ? (
+                  <div className="animate-spin size-5 border-2 border-white border-t-transparent rounded-full" />
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined">add</span>
+                    Create Your Identity
+                  </>
+                )}
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-300">
+                Already have an EVM DID? Enter the EVM address below to link this Polkadot wallet to it.
+              </div>
+              <input
+                type="text"
+                placeholder="0x... (existing EVM DID address)"
+                value={evmAddressInput}
+                onChange={(e) => setEvmAddressInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleLinkWallets()}
+                className="h-12 px-4 bg-neutral-muted border border-neutral-border rounded-lg text-white placeholder-text-muted focus:border-primary focus:outline-none"
+              />
+              <button
+                onClick={handleLinkWallets}
+                disabled={creating || !evmAddressInput.trim()}
+                className="h-12 bg-neutral-border hover:bg-neutral-border/80 text-white font-bold rounded-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                <span className="material-symbols-outlined">link</span>
+                Link Polkadot Wallet
+              </button>
+            </>
+          )}
         </div>
       </div>
     );
@@ -295,7 +373,7 @@ export default function DashboardPage() {
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center" onClick={() => setShowLinkChain(false)}>
           <div className="bg-background-dark border border-neutral-border rounded-xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
             <h3 className="text-lg font-bold">Link Chain Account</h3>
-            <select value={chainForm.chain} onChange={e => setChainForm({...chainForm, chain: e.target.value})}
+            <select title="Select blockchain" value={chainForm.chain} onChange={e => setChainForm({...chainForm, chain: e.target.value})}
               className="w-full h-10 px-3 bg-neutral-muted border border-neutral-border rounded-lg text-white">
               <option value="polkadot">Polkadot</option>
               <option value="kusama">Kusama</option>
@@ -324,7 +402,7 @@ export default function DashboardPage() {
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center" onClick={() => setShowLinkSocial(false)}>
           <div className="bg-background-dark border border-neutral-border rounded-xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
             <h3 className="text-lg font-bold">Link Social Account</h3>
-            <select value={socialForm.platform} onChange={e => setSocialForm({...socialForm, platform: e.target.value as any})}
+            <select title="Select social platform" value={socialForm.platform} onChange={e => setSocialForm({...socialForm, platform: e.target.value as any})}
               className="w-full h-10 px-3 bg-neutral-muted border border-neutral-border rounded-lg text-white">
               <option value="twitter">Twitter / X</option>
               <option value="discord">Discord</option>
@@ -405,8 +483,10 @@ export default function DashboardPage() {
                 +{identity?.scoreChange ?? 0}% this week
               </Badge>
               <div className="w-32 h-2 bg-neutral-border rounded-full mt-4 overflow-hidden">
+                {/* eslint-disable-next-line react/forbid-dom-props */}
                 <div
                   className="bg-primary h-full transition-all"
+                  // eslint-disable-next-line react/forbid-dom-props
                   style={{ width: `${identity?.score ?? 0}%` }}
                 />
               </div>

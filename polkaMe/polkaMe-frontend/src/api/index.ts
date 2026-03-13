@@ -50,6 +50,7 @@ export async function getVerificationStatus(): Promise<ApiResponse<VerificationS
     governance: "verified",
     socials: "pending",
     kyc: "unverified",
+    dao_badge: "unverified",
   });
 }
 

@@ -63,13 +63,23 @@ contract PolkaMeIdentity {
     //  1. DID MANAGEMENT
     // ═════════════════════════════════════════════════════════════════
 
-    /// @notice Create an EVM DID. DID string = "did:ethr:<address>" built off-chain.
+    /// @notice Create a DID for yourself. DID string built off-chain.
     function createDID(string calldata _displayName) external {
-        if (hasDID[msg.sender]) revert DIDAlreadyExists();
+        _createDIDInternal(msg.sender, _displayName);
+    }
+
+    /// @notice Create a DID on behalf of another address (owner only).
+    ///         Used by the backend to bootstrap Polkadot-side shadow DIDs.
+    function createDIDFor(address _user, string calldata _displayName) external onlyOwner {
+        _createDIDInternal(_user, _displayName);
+    }
+
+    function _createDIDInternal(address _user, string calldata _displayName) internal {
+        if (hasDID[_user]) revert DIDAlreadyExists();
         if (bytes(_displayName).length == 0) revert EmptyString();
 
-        dids[msg.sender] = DIDDocument({
-            didString: "",  // built off-chain: "did:ethr:" + address
+        dids[_user] = DIDDocument({
+            didString: "",  // built off-chain: "did:polkadot:" or "did:ethr:" + address
             displayName: _displayName,
             reputationScore: 10,
             scoreChange: 0,
@@ -78,16 +88,16 @@ contract PolkaMeIdentity {
             active: true
         });
 
-        verifications[msg.sender] = VerificationStatus({
+        verifications[_user] = VerificationStatus({
             email: VerificationState.Unverified,
             governance: VerificationState.Unverified,
             socials: VerificationState.Unverified,
             kyc: VerificationState.Unverified
         });
 
-        hasDID[msg.sender] = true;
+        hasDID[_user] = true;
         totalUsers++;
-        emit DIDCreated(msg.sender, block.timestamp);
+        emit DIDCreated(_user, block.timestamp);
     }
 
     function updateDisplayName(string calldata _newName) external onlyDIDOwner {
