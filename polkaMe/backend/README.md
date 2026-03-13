@@ -1,6 +1,6 @@
 # PolkaMe Backend — On-Chain (v2.0)
 
-> **Storage: On-chain Solidity contracts via ethers.js** 
+> **Storage: On-chain Solidity contracts via ethers.js**
 
 ## Stack
 
@@ -11,22 +11,24 @@
 | Chain Client | ethers.js v6 |
 | Auth | JWT (HS256) + Polkadot signature challenge |
 | Crypto | `@polkadot/util-crypto` (WASM) |
+| Contracts | Hardhat 3 (compile, deploy, test — all from this directory) |
 
 ## Quick Start
 
 ```bash
-# 1. Deploy contracts (in practice_contracts/)
-cd ../practice_contracts
-npx hardhat node                          # Start local chain
-npx hardhat run scripts/deploy.ts         # Deploy 4 contracts
-npx hardhat run scripts/seed.ts           # Seed test data
+# 1. Install all dependencies (API + Hardhat)
+npm install
 
-# 2. Configure backend
-cd ../polkame/backend
+# 2. Start local chain & deploy contracts
+npm run node:local                        # Terminal 1 — keep running
+npm run deploy:local                      # Terminal 2 — deploy 4 contracts
+npm run seed:local                        # Terminal 2 — seed test data (optional)
+
+# 3. Configure backend
 cp .env.example .env
 # Fill in contract addresses from deploy output + Hardhat account #0 private key
 
-# 3. Start backend
+# 4. Start backend
 npm run dev
 ```
 
@@ -84,19 +86,55 @@ All endpoints return `{ data: T, success: boolean, error?: string }`.
 | Governance | `POST /:address/stake`, `GET /proposals`, `POST /proposals/:id/vote` |
 | Security | `POST /:address/privacy/init`, `POST /:address/sessions`, `GET /:address/log` |
 
+## NPM Scripts
+
+| Script | Purpose |
+|---|---|
+| `npm run dev` | Start API server in dev mode (hot-reload) |
+| `npm run build` | Compile TypeScript API to `dist/` |
+| `npm start` | Run compiled API |
+| `npm run node:local` | Start local Hardhat node |
+| `npm run compile` | Compile Solidity contracts |
+| `npm run deploy:local` | Deploy contracts to local node |
+| `npm run test:contracts` | Run contract test suite (29 tests) |
+| `npm run seed:local` | Populate contracts with sample data |
+| `npm run fund:local` | Send test ETH to a wallet |
+
 ## Project Structure
 
 ```
-src/
-├── index.ts              ← Entry point 
-├── contract-client.ts    ← ethers.js provider + 4 contract instances
-├── types.ts              ← TypeScript interfaces
-├── middleware/
-│   └── auth.ts           ← JWT sign/verify, requireOwner
-└── routes/
-    ├── auth.ts           ← Nonce + JWT (in-memory nonces)
-    ├── identity.ts       ← DID, verification, credentials
-    ├── accounts.ts       ← Chain/social accounts, dApps
-    ├── governance.ts     ← Staking, proposals, voting
-    └── security.ts       ← Privacy, sessions, security log
+backend/
+├── src/                    # Express API server
+│   ├── index.ts            ← Entry point
+│   ├── contract-client.ts  ← ethers.js provider + 4 contract instances
+│   ├── types.ts            ← TypeScript interfaces
+│   ├── middleware/
+│   │   └── auth.ts         ← JWT sign/verify, requireOwner
+│   └── routes/
+│       ├── auth.ts         ← Nonce + JWT (in-memory nonces)
+│       ├── identity.ts     ← DID, verification, credentials
+│       ├── accounts.ts     ← Chain/social accounts, dApps
+│       ├── governance.ts   ← Staking, proposals, voting
+│       └── security.ts     ← Privacy, sessions, security log
+├── contracts/              # Solidity source files
+│   ├── PolkaMeTypes.sol
+│   ├── PolkaMeIdentity.sol
+│   ├── PolkaMeAccounts.sol
+│   ├── PolkaMeGovernance.sol
+│   └── PolkaMeSecurity.sol
+├── scripts/                # Hardhat deploy, seed, fund scripts
+├── test/                   # Mocha/Chai contract test suite
+├── hardhat.config.ts       # Hardhat 3 configuration
+├── tsconfig.json           # TypeScript config (API server only)
+└── package.json            # Unified dependencies
 ```
+
+## Contracts
+
+| Contract | Description |
+|---|---|
+| `PolkaMeTypes.sol` | Shared structs, enums, and events used across all contracts |
+| `PolkaMeIdentity.sol` | Core DID management — create/update identity, verification, credentials, scoring |
+| `PolkaMeAccounts.sol` | Linked chain accounts, social accounts, authorized dApps, activity log |
+| `PolkaMeGovernance.sol` | Staking, proposals, voting, validators, conviction, rewards |
+| `PolkaMeSecurity.sol` | Privacy preferences, active sessions, security audit log |

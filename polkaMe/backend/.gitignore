@@ -6,3 +6,8 @@ polkame.db
 *.db-journal
 *.db-wal
 *.db-shm
+
+# Hardhat
+artifacts/
+cache/
+typechain-types/
